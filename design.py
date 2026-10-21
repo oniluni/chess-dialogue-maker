@@ -62,6 +62,10 @@ _ICON_PATHS = {
     "menu": '<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/>',
     "scissors": '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.1 15.9"/><path d="M14.5 14.5 20 20"/><path d="M8.1 8.1 12 12"/>',
     "chevron-up": '<path d="m18 15-6-6-6 6"/>',
+    "chevron-left": '<path d="m15 18-6-6 6-6"/>',
+    "chevron-right": '<path d="m9 18 6-6-6-6"/>',
+    "sliders": '<path d="M4 6h10"/><path d="M18 6h2"/><circle cx="16" cy="6" r="2"/><path d="M4 12h4"/><path d="M12 12h8"/>'
+               '<circle cx="10" cy="12" r="2"/><path d="M4 18h12"/><circle cx="18" cy="18" r="2"/>',
     "clock": '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
     "arrow-up": '<path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>',
     "arrow-down": '<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>',
@@ -596,6 +600,30 @@ window.cdmTrim = (() => {
   new MutationObserver(() => document.querySelectorAll('.cdm-trim:not([data-init]):not(.cdm-trim-empty)').forEach(init))
     .observe(document.documentElement, { subtree: true, childList: true });
   return { parse, fmt };
+})();
+/* sound picker: ▶ chips play a set's demo at once (one sound at a time, a second click stops it) */
+(() => {
+  let audio = null, btn = null;
+  const stop = () => { if (audio) audio.pause(); if (btn) btn.classList.remove('is-playing'); audio = btn = null; };
+  window.cdmPlay = (url, b, toggle = true) => {  // toggle=false: always (re)start — a Dropdown pick fires twice
+    const same = toggle && b && b === btn;
+    stop();
+    if (same || !url) return;
+    const a = audio = new Audio(url); btn = b || null;
+    if (btn) btn.classList.add('is-playing');
+    const mine = () => { if (audio === a) stop(); };  // an interrupted older sound must not stop the new one
+    a.addEventListener('ended', mine);
+    a.play().catch(mine);
+  };
+  // a dialog that just opened starts at its top (Gradio may scroll a checked radio into view)
+  new MutationObserver(() => {
+    const c = document.querySelector('#rec-card:not([data-top])');
+    if (c) { c.dataset.top = '1'; setTimeout(() => { c.scrollTop = 0; }, 60); }
+  }).observe(document.documentElement, { subtree: true, childList: true });
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-cdm-play]');
+    if (b) { e.preventDefault(); window.cdmPlay(b.dataset.cdmPlay, b); }
+  });
 })();
 </script>
 """

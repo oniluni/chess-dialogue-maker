@@ -3,8 +3,9 @@
 
 Reliable items and guesses look different (a badge and a dashed outline). In the edit
 fields a guess is a line starting with «?»; removing the «?» makes it a fact. A section
-the person changed is kept when the summary is generated again. «Принять» marks the
-summary as checked; during the creation of a video it also continues to the analysis.
+the person changed is kept when the summary is generated again. «Принять» saves the edits
+and marks the summary as checked; during the creation of a video it also continues to the
+analysis.
 """
 from __future__ import annotations
 
@@ -67,13 +68,12 @@ def build(gr) -> SimpleNamespace:
     with gr.Row(elem_classes="cdm-actions", elem_id="summary-actions"):
         accept = gr.Button("Принять сводку", icon=design.icon("check", "dark"), variant="primary", elem_id="sum-accept",
                            scale=0)
-        save = gr.Button("Сохранить правки", icon=design.icon("check"), variant="secondary", elem_id="sum-save", scale=0)
         regen = gr.Button("Сгенерировать заново", icon=design.icon("sparkles"), variant="secondary", elem_id="sum-regen",
                           scale=0)
         manual = gr.Button("Написать вручную", icon=design.icon("edit"), variant="secondary", elem_id="sum-manual", scale=0)
     confirm = gr.State(None)
     outputs = [state_md, view, *boxes.values(), errs, accept, edit_acc, confirm]
-    ns = SimpleNamespace(state_md=state_md, view=view, boxes=boxes, errs=errs, accept=accept, save=save, regen=regen,
+    ns = SimpleNamespace(state_md=state_md, view=view, boxes=boxes, errs=errs, accept=accept, regen=regen,
                          manual=manual, edit_acc=edit_acc, confirm=confirm, outputs=outputs)
 
     def load(jid, msg: str = "", open_edit: bool | None = None) -> dict:
@@ -109,16 +109,6 @@ def wire(ns, shell, flow, flow_outs: list, ai) -> None:
     def msgs(errs: list[str]) -> str:
         return "".join(f"<div class='cdm-msg cdm-msg-error'>✗ {up.esc(e)}</div>" for e in errs)
 
-    def on_save(jid, *texts):
-        if not jid:
-            return {shell.status: "⚠️ Сначала создайте видео или выберите задание"}
-        job = Job.load(jid)
-        s, errs = apply_edits(job, texts)
-        if errs:
-            return {ns.errs: msgs(errs), shell.status: f"⚠️ {errs[0]}"}
-        s.save(job.dir)
-        return {**ns.load(jid), shell.status: "✅ Сводка сохранена — правленые разделы не перезапишутся"}
-
     def on_accept(jid, *texts):
         if not jid:
             yield {shell.status: "⚠️ Сначала создайте видео или выберите задание"}
@@ -130,7 +120,7 @@ def wire(ns, shell, flow, flow_outs: list, ai) -> None:
             return
         s.status = "accepted"
         s.save(job.dir)
-        yield {**ns.load(jid, open_edit=False), shell.status: "✅ Сводка принята"}
+        yield {**ns.load(jid, open_edit=False), shell.status: "✅ Сводка принята — ваши правки сохранены и не перезапишутся"}
         if _in_flow(jid):
             yield from flow(jid, "analysis")
 
@@ -166,7 +156,6 @@ def wire(ns, shell, flow, flow_outs: list, ai) -> None:
     hid = dict(show_progress="hidden")
     texts = list(ns.boxes.values())
     base = list(dict.fromkeys([*ns.outputs, shell.status]))
-    ns.save.click(on_save, [shell.job_id, *texts], base, **hid)
     ns.accept.click(on_accept, [shell.job_id, *texts], list(dict.fromkeys(base + flow_outs)), **hid)
     ns.regen.click(on_regen, [shell.job_id, *texts], list(dict.fromkeys(base + shell.dock + ai.outputs)), **hid)
     ns.manual.click(on_manual, [shell.job_id, ns.confirm], base, **hid)

@@ -5,7 +5,7 @@ uses — asked for one output frame (with the pauses, transitions, subtitles and
 tags of the chosen moment) on top of the real frame of the clip. Without a job the
 same code draws a demo analysis over a neutral picture. Presets are built in
 (style.PRESETS) or saved by the person (style_presets.json); a job's style is its
-style.json, applied by «Сохранить в задание» or straight away with a re-render.
+style.json, saved on every edit while a job is selected (and by «Сохранить в задание»).
 """
 from __future__ import annotations
 
@@ -301,8 +301,17 @@ def build(shell) -> SimpleNamespace:
         return res
 
     # ---------------------------------------------------------------- handlers
+    def autosave(jid, st: vs.VideoStyle) -> None:
+        """The selected job always renders what the preview shows: every edit is saved into it."""
+        if jid:
+            try:
+                vs.save_job_style(Job.load(jid).dir, st)
+            except FileNotFoundError:
+                pass
+
     def on_change(jid, name, fmt_v, t, *vals):
         st, problems_ = read(name, vals)
+        autosave(jid, st)
         return render_view(jid, st, problems_, fmt_v, t)
 
     def on_time(jid, name, fmt_v, t, *vals):
@@ -325,7 +334,9 @@ def build(shell) -> SimpleNamespace:
             return {}
         res = dict(zip(controls, values_of(st)))
         res.update(render_view(jid, st, st.problems(), fmt_v, t))
-        return {**res, shell.status: f"🎨 Пресет «{name}» — сохраните его в задание, чтобы применить к видео"}
+        autosave(jid, st)
+        return {**res, shell.status: f"🎨 Пресет «{name}» применён к заданию — видео соберётся в этом стиле" if jid
+                else f"🎨 Пресет «{name}» — выберите задание слева, и стиль сохранится в нём"}
 
     def on_save_preset(jid, new_name, name, fmt_v, t, *vals):
         st, problems_ = read(name, vals)

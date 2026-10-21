@@ -34,7 +34,7 @@ import reframe
 import style as vstyle
 from analyzer import Move
 from ingest import fmt_duration, probe
-from make_assets import ensure_icons, ensure_sfx, icon_path, sfx_files, write_wav
+from make_assets import ensure_icons, icon_path, sfx_files, write_wav
 
 log = logging.getLogger(__name__)
 L = config.LAYOUT
@@ -44,6 +44,9 @@ EVAL_ANIM = DEFAULT_STYLE.eval_anim     # s, eval bar ease-in-out (defaults; a V
 ICON_ANIM = DEFAULT_STYLE.icon_anim     # s, icon pop-in
 CARD_FADE = DEFAULT_STYLE.card_fade     # s, card crossfade
 BOTTOM_SAFE = 300   # px left free under a bottom analysis strip (TikTok's caption and buttons)
+TIKTOK_SAFE_BOTTOM = 420  # px at the bottom of the TikTok screen under its caption / music line
+TIKTOK_SAFE_RIGHT = 140   # px at the right edge under its like / comment / share buttons
+SAFE_PAD = 8        # px between an overlay and the edge of the free area
 PAUSE_TAIL = 0.12   # s, the picture freezes this long after the last word (if there is room)
 TICK_GAP = 0.045    # s, minimum distance between two typewriter ticks
 AUDIO_SR = 48000
@@ -66,6 +69,8 @@ class RenderOptions:
     sfx_pause: bool = config.SFX_PAUSE
     sfx_unpause: bool = config.SFX_UNPAUSE
     sfx_typing: bool = config.SFX_TYPING
+    sfx_typing_set: str = config.SFX_TYPING_SET  # make_assets.TYPING_SETS id (or a folder in assets/sfx/typing)
+    sfx_pause_set: str = config.SFX_PAUSE_SET    # make_assets.PAUSE_SETS id: the pause + resume pair
 
     def sound_on(self, name: str) -> bool:
         if not self.sfx_enabled or self.sfx_volume <= 0:
@@ -546,8 +551,14 @@ class VideoOverlay:
     """Subtitles and sound tags drawn over the video box. `key(t)` changes only when what is
     visible changes, so the render loop re-composites the box only then."""
 
-    def __init__(self, box_w: int, box_h: int, st: vstyle.VideoStyle, segments=None, tags: list[SoundTag] | None = None):
+    def __init__(self, box_w: int, box_h: int, st: vstyle.VideoStyle, segments=None, tags: list[SoundTag] | None = None,
+                 safe: tuple[int, int] | None = None):
+        """`safe` = (right, bottom) of the free area in box pixels: subtitles and tags stay left of
+        `right` and above `bottom` (TikTok's own buttons and caption cover the rest)."""
         self.bw, self.bh, self.st = box_w, box_h, st
+        self.right = self.bw if safe is None else max(1, min(self.bw, safe[0]))
+        self.bottom = self.bh if safe is None else max(1, min(self.bh, safe[1]))
+        self.safe = safe
         self.chunks = subtitle_chunks(segments or [], st.sub_words) if st.subtitles else []
         self.starts = [c.start for c in self.chunks]
         self.tags = sorted(tags or [], key=lambda g: g.start) if st.sound_tags else []
@@ -576,10 +587,13 @@ class VideoOverlay:
     def _subtitle(self, k: int, wi: int) -> tuple[Image.Image, int, int]:
         st = self.st
         words = [w.text.upper() if st.sub_upper else w.text for w in self.chunks[k].words]
-        max_w = int(self.bw * 0.88)
+        cx = self.bw / 2
         size = st.sub_size
         while True:  # at most two lines: shrink the font if needed
             f = st.font("bold", size)
+            max_w = int(self.bw * 0.88)
+            if self.safe is not None:  # centred, and the whole block left of the right-hand buttons
+                max_w = max(80, min(max_w, int(2 * (self.right - SAFE_PAD - cx)) - 2 * int(size * 0.45) - 8))
             lines: list[list[int]] = [[]]
             for i, w in enumerate(words):
                 cand = " ".join(words[j] for j in lines[-1] + [i])
@@ -608,8 +622,8 @@ class VideoOverlay:
                 d.text((x, y), words[j], font=f, fill=fill, stroke_width=stroke, stroke_fill=(0, 0, 0, 230))
                 x += text_w(f, words[j]) + space
             y += lh
-        cx, cy = self.bw / 2, self.bh * st.sub_position
-        return img, round(cx - w_img / 2), round(min(self.bh - h_img - 8, max(8, cy - h_img / 2)))
+        cy = self.bh * st.sub_position
+        return img, round(cx - w_img / 2), round(min(self.bottom - h_img - SAFE_PAD, max(8, cy - h_img / 2)))
 
     def _tag(self, i: int) -> Image.Image:
         st = self.st
@@ -631,7 +645,7 @@ class VideoOverlay:
             self._cache.clear()
         out = []
         sub, tags = key
-        sub_top = self.bh
+        sub_top = self.bottom
         if sub is not None:
             img, x, y = self._subtitle(*sub)
             out.append((img, x, y))
@@ -643,7 +657,7 @@ class VideoOverlay:
                 img.putalpha(img.getchannel("A").point(lambda v, a=alpha: int(v * a)))
             pos = self.st.tag_position
             if pos == "top-right":
-                x = self.bw - img.width - 28
+                x = self.right - img.width - 28
             elif pos == "above-subs":
                 x = (self.bw - img.width) // 2
             else:
@@ -798,14 +812,22 @@ def _read_wav(path: Path) -> np.ndarray:
     return x
 
 
-def load_sfx() -> dict[str, np.ndarray]:
-    ensure_sfx()
-    files = sfx_files()
-    out = {"pause": _read_wav(files["pause"]), "unpause": _read_wav(files["unpause"])}
-    out["move"] = out["pause"]
-    for i in range(1, 5):
-        out[f"tick{i}"] = _read_wav(files[f"type_tick_{i}"])
-    return out
+_SFX_CACHE: dict[tuple, dict[str, np.ndarray]] = {}
+
+
+def load_sfx(typing: str = config.SFX_TYPING_SET, pause: str = config.SFX_PAUSE_SET) -> dict[str, np.ndarray]:
+    """The chosen sets: pause, unpause, move (= pause) and tick1..4 (a set with fewer ticks repeats them)."""
+    files = sfx_files(typing, pause)
+    key = (typing, pause, *(f.stat().st_mtime for f in files.values()))
+    if key not in _SFX_CACHE:
+        out = {"pause": _read_wav(files["pause"]), "unpause": _read_wav(files["unpause"])}
+        out["move"] = out["pause"]
+        ticks = [_read_wav(f) for k, f in files.items() if k.startswith("type_tick_")]
+        for i in range(1, 5):
+            out[f"tick{i}"] = ticks[(i - 1) % len(ticks)]
+        _SFX_CACHE.clear()
+        _SFX_CACHE[key] = out
+    return _SFX_CACHE[key]
 
 
 def decode_audio(clip: Path) -> np.ndarray:
@@ -827,8 +849,12 @@ def soft_limit(x: np.ndarray, t: float = 0.89) -> np.ndarray:
 
 def build_audio(clip: Path, sched: Schedule, fps: int, opts: RenderOptions) -> np.ndarray:
     """Original sound laid out along the schedule (silence while frozen) + SFX."""
+    return lay_audio(decode_audio(clip), sched, fps, opts)
+
+
+def lay_audio(src: np.ndarray, sched: Schedule, fps: int, opts: RenderOptions) -> np.ndarray:
+    """`src` (decoded stereo at AUDIO_SR) laid out along the schedule + the SFX, soft-limited."""
     sidx = lambda k: int(round(k * AUDIO_SR / fps))  # noqa: E731
-    src = decode_audio(clip)
     out = np.zeros((sidx(sched.n_out), 2), np.float32)
     fade = int(0.015 * AUDIO_SR)
     for out0, src0, n in sched.runs:
@@ -845,7 +871,7 @@ def build_audio(clip: Path, sched: Schedule, fps: int, opts: RenderOptions) -> n
         out[a0 : a0 + len(seg)] = seg
     events = [(t, name) for t, name in sched.sfx if opts.sound_on(name)]
     if events:
-        sounds = load_sfx()
+        sounds = load_sfx(opts.sfx_typing_set, opts.sfx_pause_set)
         for t, name in events:
             snd = sounds[name] * SFX_GAIN["tick" if name.startswith("tick") else name] * opts.sfx_volume
             p = int(t * AUDIO_SR)
@@ -853,6 +879,51 @@ def build_audio(clip: Path, sched: Schedule, fps: int, opts: RenderOptions) -> n
             if n > 0:
                 out[p : p + n] += snd[:n, None]
     return soft_limit(out)
+
+
+PREVIEW_TYPING = 1.5   # s of typing in the sound preview
+PREVIEW_AFTER = 1.5    # s of the clip after the pause
+_PREVIEW_TEXT = "Сильный ход: соперник теряет опору и отступает, а ответа у него нет. "
+
+
+def decode_audio_range(clip: Path, start: float, seconds: float) -> np.ndarray:
+    """`seconds` of the clip's sound from `start` (stereo, AUDIO_SR), zero-padded at the end."""
+    n = int(round(seconds * AUDIO_SR))
+    proc = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", str(clip), "-ss", f"{max(0.0, start):.4f}", "-t", f"{seconds:.4f}",
+         "-vn", "-ac", "2", "-ar", str(AUDIO_SR), "-f", "f32le", "-"],
+        capture_output=True,
+    )
+    x = np.frombuffer(proc.stdout, np.float32) if proc.returncode == 0 else np.zeros(0, np.float32)
+    x = x[: len(x) // 2 * 2].reshape(-1, 2)[:n]
+    return np.vstack([x, np.zeros((n - len(x), 2), np.float32)]) if len(x) < n else x.copy()
+
+
+def sound_preview(clip: Path | None, opts: RenderOptions, out: Path, at: float = 0.0, seconds: float = 2.5,
+                  st: vstyle.VideoStyle = DEFAULT_STYLE) -> Path:
+    """A short WAV that sounds exactly like the render around one move: `seconds` of the clip
+    from `at`, then the pause with its sounds (pop-in, typing for PREVIEW_TYPING s at
+    `opts.typing_cps`, the reading time, the resume), then PREVIEW_AFTER s more of the clip.
+    Without pause-on-move: the clip plays on and the move sound comes at `seconds`. Built with
+    the render's own schedule and mixer (gains, volume, switches, declick, limiter)."""
+    fps = config.FPS
+    seconds = max(0.2, float(seconds))
+    n_src = int(round((seconds + PREVIEW_AFTER) * fps))
+    chars = max(1, round(PREVIEW_TYPING * max(1.0, opts.typing_cps)))
+    text = (_PREVIEW_TEXT * (chars // len(_PREVIEW_TEXT) + 1))[:chars].strip() or "Ход"
+    move = Move(start=0.0, end=max(0.0, seconds - PAUSE_TAIL), move_number="1", speaker="white", move_type="Best",
+                title="Ход", explanation=text, eval_score=0.0)
+    if opts.pause_on_move:
+        sched = build_schedule([move], n_src, fps, opts, [chars], st)
+    else:
+        sched = Schedule(np.arange(n_src), [], [(0, 0, n_src)], [(seconds, "move")])
+    total = sched.n_out / fps
+    src = decode_audio_range(clip, at, n_src / fps) if clip is not None and Path(clip).exists() else \
+        np.zeros((int(round(n_src / fps * AUDIO_SR)), 2), np.float32)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    write_wav(out, lay_audio(src, sched, fps, opts), AUDIO_SR)
+    log.debug("sound preview: %.2f s (clip from %.2f s, pause %.2f s) -> %s", total, at, total - n_src / fps, out)
+    return out
 
 
 # ---------------------------------------------------------------- composition (render loop and preview share it)
@@ -877,8 +948,8 @@ class Composer:
         bx, by, bw, bh = self.geo.box
         self.plan = plan if plan is not None else reframe.plan(vision, src_w, src_h, bw, bh, self.n_src, fps, speaker_at)
         self.framer = reframe.Framer(bw, bh)
-        self.overlay = VideoOverlay(bw, bh, st, segments, tags)
         cw, ch = self.geo.canvas
+        self.overlay = VideoOverlay(bw, bh, st, segments, tags, safe_area(opts.output_format, self.geo))
         self.canvas = np.zeros((ch, cw, 3), np.uint8)
         self.canvas[:] = np.array(Image.new("RGB", (1, 1), st.page_bg))[0, 0]
         self._tile_key = self._ui_key = None
@@ -909,11 +980,22 @@ class Composer:
         return max(0, min(self.n_out - 1, int(round(seconds * self.fps))))
 
 
+def safe_area(fmt: str, geo: Geometry) -> tuple[int, int] | None:
+    """(right, bottom) of the part of the video box that TikTok's own interface leaves free,
+    in box pixels; None for the other formats (nothing covers them)."""
+    if fmt != "tiktok":
+        return None
+    bx, by, bw, bh = geo.box
+    cw, ch = geo.canvas
+    return min(bw, cw - TIKTOK_SAFE_RIGHT - bx), min(bh, ch - TIKTOK_SAFE_BOTTOM - by)
+
+
 def decode_frame(clip: Path, src_idx: int, size: tuple[int, int], fps: int = config.FPS) -> np.ndarray:
     """One source frame, decoded and scaled exactly like the render loop does it."""
     w, h = size
     proc = subprocess.run(
-        ["ffmpeg", "-v", "error", "-ss", f"{src_idx / fps:.4f}", "-i", str(clip), "-an", "-frames:v", "1",
+        # seek half a frame early: a time rounded up past the frame's own timestamp would give the next frame
+        ["ffmpeg", "-v", "error", "-ss", f"{max(0.0, (src_idx - 0.5) / fps):.4f}", "-i", str(clip), "-an", "-frames:v", "1",
          "-vf", f"scale={w}:{h}", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
         capture_output=True,
     )
@@ -976,9 +1058,10 @@ def render_video(
          "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{cw}x{ch}", "-r", str(fps), "-i", "-",
          "-i", str(wav),
          "-map", "0:v", "-map", "1:a",
+         "-vf", "setsar=1", "-aspect", f"{cw}:{ch}",   # square pixels: no player may stretch the picture
          "-c:v", "libx264", "-preset", config.X264_PRESET, "-crf", str(config.X264_CRF),
-         "-profile:v", "high", "-pix_fmt", "yuv420p", "-r", str(fps),
-         "-c:a", "aac", "-b:a", "192k",
+         "-profile:v", "high", "-pix_fmt", "yuv420p", "-r", str(fps), "-fps_mode", "cfr",
+         "-c:a", "aac", "-b:a", "192k", "-ar", str(AUDIO_SR), "-ac", "2",
          "-movflags", "+faststart", "-shortest",
          str(out)],
         stdin=subprocess.PIPE, stderr=subprocess.PIPE,

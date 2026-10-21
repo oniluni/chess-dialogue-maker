@@ -199,22 +199,265 @@ def write_wav(path: Path, x: np.ndarray, sr: int = SFX_SR) -> None:
         w.writeframes(pcm.tobytes())
 
 
-def sfx_files() -> dict[str, Path]:
-    names = ["pause", "unpause"] + [f"type_tick_{i}" for i in range(1, TYPE_TICKS + 1)]
-    return {n: config.SFX_DIR / f"{n}.wav" for n in names}
+# ---- more sound sets: the person picks one typing set and one pause set (renderer.RenderOptions)
+def _pitch(i: int) -> float:
+    return 1 + 0.06 * (i - (TYPE_TICKS - 1) / 2)
+
+
+def tick_typewriter(i: int) -> np.ndarray:
+    """Typewriter: a metallic type-bar strike with a low carriage thunk."""
+    rng = np.random.default_rng(20 + i)
+    t = _t(0.09)
+    p = _pitch(i)
+    strike = _bandpass(rng.standard_normal(len(t)), 2500 * p, 9000) * np.exp(-t / 0.003)
+    metal = _modes(t, [(3150 * p, 0.5, 0.02), (5230 * p, 0.3, 0.012), (7400 * p, 0.15, 0.008)])
+    thunk = _modes(t, [(210 * p, 0.6, 0.02)])
+    return _finish(strike / (np.abs(strike).max() + 1e-9) + metal + thunk, 0.55)
+
+
+def tick_mechanical(i: int) -> np.ndarray:
+    """Mechanical keyboard: a crisp click on press, a softer one on release."""
+    rng = np.random.default_rng(30 + i)
+    t = _t(0.07)
+    p = _pitch(i)
+    press = _bandpass(rng.standard_normal(len(t)), 3000 * p, 11000) * np.exp(-t / 0.0015)
+    rel_t = np.clip(t - 0.028, 0, None)
+    release = _bandpass(rng.standard_normal(len(t)), 2200 * p, 8000) * np.exp(-rel_t / 0.0012) * (t >= 0.028) * 0.45
+    body = _modes(t, [(4100 * p, 0.25, 0.004), (900 * p, 0.2, 0.006)])
+    return _finish(press / (np.abs(press).max() + 1e-9) + release / (np.abs(press).max() + 1e-9) + body, 0.5)
+
+
+def tick_pencil(i: int) -> np.ndarray:
+    """Pencil on paper: a short grainy scratch."""
+    rng = np.random.default_rng(40 + i)
+    t = _t(0.075)
+    p = _pitch(i)
+    env = np.sin(np.pi * np.clip(t / 0.07, 0, 1)) ** 1.5
+    grain = _bandpass(rng.standard_normal(len(t)), 2400 * p, 6500) * env
+    grain *= 1 + 0.6 * (rng.random(len(t)) > 0.97)  # graphite grit
+    return _finish(grain, 0.32)
+
+
+def tick_bubble(i: int) -> np.ndarray:
+    """Soft bubble pop: a tiny rising sine blip."""
+    t = _t(0.06)
+    p = _pitch(i)
+    blip = _sweep(t, 700 * p, 1500 * p, 0.03, 0.018)
+    return _finish(blip, 0.38)
+
+
+def clock_pause() -> np.ndarray:
+    """Chess clock: two mechanical clacks of the button."""
+    rng = np.random.default_rng(50)
+    t = _t(0.3)
+    clack = lambda t0, b: (_bandpass(rng.standard_normal(len(t)), 1500, 9000) * np.exp(-np.clip(t - t0, 0, None) / 0.002)  # noqa: E731
+                           * (t >= t0) * 0.5 + _modes(t, [(1900 * b, 0.6, 0.02), (3300 * b, 0.3, 0.012), (240, 0.5, 0.03)], t0))
+    return _finish(clack(0.0, 1.0) + 0.7 * clack(0.07, 1.08), 0.7)
+
+
+def clock_unpause() -> np.ndarray:
+    rng = np.random.default_rng(51)
+    t = _t(0.22)
+    x = (_bandpass(rng.standard_normal(len(t)), 1500, 9000) * np.exp(-t / 0.002) * 0.5
+         + _modes(t, [(2100, 0.6, 0.018), (3600, 0.3, 0.01), (260, 0.4, 0.025)]))
+    return _finish(x, 0.6)
+
+
+def _whoosh(t: np.ndarray, f0: float, f1: float, dur: float, rng) -> np.ndarray:
+    noise = rng.standard_normal(len(t))
+    out = np.zeros(len(t))
+    steps = 24
+    for k in range(steps):  # a band of noise gliding from f0 to f1
+        a, b = int(len(t) * k / steps), int(len(t) * (k + 1) / steps)
+        fc = f0 * (f1 / f0) ** min(1.0, t[a] / dur)
+        out[a:b] = _bandpass(noise, fc * 0.7, fc * 1.4)[a:b]
+    env = np.sin(np.pi * np.clip(t / dur, 0, 1)) ** 2
+    return out * env
+
+
+def whoosh_pause() -> np.ndarray:
+    """Whoosh down: the picture stops."""
+    rng = np.random.default_rng(60)
+    t = _t(0.38)
+    return _finish(_whoosh(t, 3200, 500, 0.36, rng), 0.55)
+
+
+def whoosh_unpause() -> np.ndarray:
+    rng = np.random.default_rng(61)
+    t = _t(0.3)
+    return _finish(_whoosh(t, 600, 3600, 0.28, rng), 0.5)
+
+
+def _bell(t: np.ndarray, f: float, tau: float) -> np.ndarray:
+    return _modes(t, [(f, 1.0, tau), (f * 2.76, 0.45, tau * 0.6), (f * 5.4, 0.2, tau * 0.35), (f * 0.5, 0.15, tau)])
+
+
+def chime_pause() -> np.ndarray:
+    """A soft two-note bell going down."""
+    t = _t(0.7)
+    x = _bell(t, 1320, 0.25) * (t >= 0) + 0.8 * _bell(np.clip(t - 0.11, 0, None), 990, 0.3) * (t >= 0.11)
+    return _finish(x, 0.5)
+
+
+def chime_unpause() -> np.ndarray:
+    t = _t(0.5)
+    return _finish(_bell(t, 1760, 0.18), 0.42)
+
+
+def tape_pause() -> np.ndarray:
+    """Tape stop: a low tone that slows down to nothing."""
+    t = _t(0.45)
+    tone = _sweep(t, 420, 60, 0.42, 0.5) + 0.4 * _sweep(t, 840, 120, 0.42, 0.4)
+    return _finish(tone * np.clip((0.45 - t) / 0.1, 0, 1), 0.55)
+
+
+def tape_unpause() -> np.ndarray:
+    t = _t(0.3)
+    tone = _sweep(t, 80, 440, 0.2, 0.25) + 0.4 * _sweep(t, 160, 880, 0.2, 0.2)
+    return _finish(tone, 0.5)
+
+
+# set id -> (Russian label, synthesizer); the first entry of each kind is the default
+TYPING_SETS = {
+    "soft": ("Мягкие клавиши", sfx_type_tick),
+    "typewriter": ("Пишущая машинка", tick_typewriter),
+    "mechanical": ("Механическая клавиатура", tick_mechanical),
+    "pencil": ("Карандаш по бумаге", tick_pencil),
+    "bubble": ("Пузырьки", tick_bubble),
+}
+PAUSE_SETS = {
+    "wood": ("Шахматная фигура", sfx_pause, sfx_unpause),
+    "clock": ("Шахматные часы", clock_pause, clock_unpause),
+    "whoosh": ("Вжух", whoosh_pause, whoosh_unpause),
+    "chime": ("Колокольчик", chime_pause, chime_unpause),
+    "tape": ("Остановка плёнки", tape_pause, tape_unpause),
+}
+SFX_KINDS = ("typing", "pause")
+
+
+def sfx_sets(kind: str) -> dict[str, str]:
+    """Available sets of one kind (built-in first, then folders the person added): id -> label.
+    A typing set is a folder of type_tick_*.wav, a pause set a folder with pause.wav (+ unpause.wav)."""
+    ensure_sfx()
+    builtin = TYPING_SETS if kind == "typing" else PAUSE_SETS
+    out = {k: v[0] for k, v in builtin.items()}
+    root = config.SFX_DIR / kind
+    need = "type_tick_*.wav" if kind == "typing" else "pause.wav"
+    for d in sorted(root.iterdir()) if root.is_dir() else []:
+        if d.is_dir() and d.name not in out and any(d.glob(need)):
+            if all(_pcm16(f) for f in d.glob("*.wav") if f.name != "demo.wav"):
+                out[d.name] = d.name.replace("_", " ")
+            else:
+                print(f"  sfx   {kind}/{d.name}: нужны WAV 16 бит PCM — набор пропущен")
+    return out
+
+
+def _pcm16(path: Path) -> bool:
+    try:
+        with wave.open(str(path)) as w:
+            return w.getsampwidth() == 2
+    except (wave.Error, EOFError, OSError):
+        return False
+
+
+def sfx_files(typing: str = "soft", pause: str = "wood") -> dict[str, Path]:
+    """The files of a typing set and a pause set (unknown ids fall back to the defaults):
+    pause, unpause, type_tick_1..N."""
+    ensure_sfx()
+    tdir = config.SFX_DIR / "typing" / typing
+    if not any(tdir.glob("type_tick_*.wav")):
+        tdir = config.SFX_DIR / "typing" / next(iter(TYPING_SETS))
+    pdir = config.SFX_DIR / "pause" / pause
+    if not (pdir / "pause.wav").exists():
+        pdir = config.SFX_DIR / "pause" / next(iter(PAUSE_SETS))
+    files = {"pause": pdir / "pause.wav",
+             "unpause": pdir / "unpause.wav" if (pdir / "unpause.wav").exists() else pdir / "pause.wav"}
+    for k, f in enumerate(sorted(tdir.glob("type_tick_*.wav")), 1):
+        files[f"type_tick_{k}"] = f
+    return files
+
+
+def _demo_typing(ticks: list[np.ndarray]) -> np.ndarray:
+    """About a second of typing, irregular like the render's typewriter."""
+    rng = np.random.default_rng(7)
+    out = np.zeros(int(1.3 * SFX_SR))
+    t = 0.05
+    while t < 1.15:
+        x = ticks[rng.integers(len(ticks))]
+        p = int(t * SFX_SR)
+        n = min(len(x), len(out) - p)
+        out[p:p + n] += x[:n] * 0.8
+        t += rng.uniform(0.06, 0.12)
+    return np.clip(out, -1, 1)
+
+
+def _demo_pause(pause: np.ndarray, unpause: np.ndarray) -> np.ndarray:
+    gap = int(0.55 * SFX_SR)
+    return np.concatenate([np.zeros(int(0.03 * SFX_SR)), pause, np.zeros(gap), unpause, np.zeros(int(0.1 * SFX_SR))])
+
+
+def _read(path: Path) -> np.ndarray:
+    with wave.open(str(path)) as w:
+        x = np.frombuffer(w.readframes(w.getnframes()), "<i2").astype(np.float32) / 32768
+        x = x.reshape(-1, w.getnchannels()).mean(axis=1)
+        sr = w.getframerate()
+    if sr != SFX_SR:
+        x = np.interp(np.arange(int(len(x) * SFX_SR / sr)) * sr / SFX_SR, np.arange(len(x)), x)
+    return x
+
+
+def sfx_demo(kind: str, set_id: str) -> Path:
+    """demo.wav of a set (made once; also for sets the person added)."""
+    files = sfx_files(typing=set_id) if kind == "typing" else sfx_files(pause=set_id)
+    folder = (files["type_tick_1"] if kind == "typing" else files["pause"]).parent
+    out = folder / "demo.wav"
+    if not out.exists() or out.stat().st_mtime < max(f.stat().st_mtime for f in folder.glob("*.wav") if f.name != "demo.wav"):
+        if kind == "typing":
+            x = _demo_typing([_read(f) for k, f in files.items() if k.startswith("type_tick_")])
+        else:
+            x = _demo_pause(_read(files["pause"]), _read(files["unpause"]))
+        write_wav(out, x)
+    return out
+
+
+def _level(sounds: list[np.ndarray], ref: float | None) -> list[np.ndarray]:
+    """Scale a set to the loudness (RMS of its active part) of the default set, peak at most 0.9."""
+    rms = np.sqrt(np.mean(np.concatenate([x[np.abs(x) > 0.01 * np.abs(x).max()] for x in sounds]) ** 2))
+    if ref is None or rms <= 0:
+        return sounds
+    g = min(ref / rms, 0.9 / max(np.abs(x).max() for x in sounds))
+    return [x * g for x in sounds]
+
+
+def _rms(sounds: list[np.ndarray]) -> float:
+    return float(np.sqrt(np.mean(np.concatenate([x[np.abs(x) > 0.01 * np.abs(x).max()] for x in sounds]) ** 2)))
 
 
 def make_sfx() -> None:
-    config.SFX_DIR.mkdir(parents=True, exist_ok=True)
-    sounds = {"pause": sfx_pause(), "unpause": sfx_unpause()}
-    sounds.update({f"type_tick_{i}": sfx_type_tick(i - 1) for i in range(1, TYPE_TICKS + 1)})
-    for name, x in sounds.items():
-        write_wav(config.SFX_DIR / f"{name}.wav", x)
-        print(f"  sfx   {name:<12} {len(x) / SFX_SR * 1000:4.0f} ms")
+    ref_t = _rms([sfx_type_tick(i) for i in range(TYPE_TICKS)])
+    ref_p = _rms([sfx_pause(), sfx_unpause()])
+    for sid, (label, fn) in TYPING_SETS.items():
+        d = config.SFX_DIR / "typing" / sid
+        d.mkdir(parents=True, exist_ok=True)
+        ticks = _level([fn(i - 1) for i in range(1, TYPE_TICKS + 1)], ref_t)
+        for i, x in enumerate(ticks, 1):
+            write_wav(d / f"type_tick_{i}.wav", x)
+        write_wav(d / "demo.wav", _demo_typing(ticks))
+        print(f"  sfx   typing/{sid:<11} {label}")
+    for sid, (label, fp, fu) in PAUSE_SETS.items():
+        d = config.SFX_DIR / "pause" / sid
+        d.mkdir(parents=True, exist_ok=True)
+        p, u = _level([fp(), fu()], ref_p)
+        write_wav(d / "pause.wav", p)
+        write_wav(d / "unpause.wav", u)
+        write_wav(d / "demo.wav", _demo_pause(p, u))
+        print(f"  sfx   pause/{sid:<12} {label}")
 
 
 def ensure_sfx() -> None:
-    if not all(p.exists() for p in sfx_files().values()):
+    builtin = [config.SFX_DIR / "typing" / s / f"type_tick_{TYPE_TICKS}.wav" for s in TYPING_SETS] + \
+              [config.SFX_DIR / "pause" / s / "unpause.wav" for s in PAUSE_SETS]
+    if not all(p.exists() for p in builtin):
         make_sfx()
 
 

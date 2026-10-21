@@ -98,7 +98,7 @@ def _run_all(job: Job) -> None:
 
     while True:
         try:
-            pipeline.run_all(job, console.progress_bar)
+            pipeline.run_all(job, console.progress_bar, review=False)  # CLI: the best answer, as before
             return
         except (ingest.PartialUnavailable, ingest.NeedsRange) as e:
             log.warning("%s %s", e.title, e.hint)
@@ -172,7 +172,13 @@ def cmd_models(a) -> None:
 
 
 def _options(a) -> dict:
-    return {k: getattr(a, k, None) for k in (*pipeline.OPTION_FIELDS, "llm_provider", "llm_model")}
+    opts = {k: getattr(a, k, None) for k in (*pipeline.OPTION_FIELDS, "llm_provider", "llm_model")}
+    import make_assets
+    for key, kind in (("sfx_typing_set", "typing"), ("sfx_pause_set", "pause")):
+        sets = make_assets.sfx_sets(kind)
+        if opts.get(key) is not None and opts[key] not in sets:
+            raise SystemExit(f"Нет набора звуков «{opts[key]}». Есть: {', '.join(sets)}.")
+    return opts
 
 
 def _load_with_options(a) -> Job:
@@ -184,7 +190,7 @@ def _load_with_options(a) -> Job:
 
 def cmd_analyze(a) -> None:
     job = _load_with_options(a)
-    pipeline.step_analyze(job)
+    pipeline.step_analyze(job, review=False)
     pipeline.step_render(job, console.progress_bar)
     _after(job, a)
 
@@ -257,6 +263,10 @@ def add_render_options(p: argparse.ArgumentParser) -> None:
     g.add_argument("--sfx-pause", action=argparse.BooleanOptionalAction, default=None, help="pause sound")
     g.add_argument("--sfx-unpause", action=argparse.BooleanOptionalAction, default=None, help="resume sound")
     g.add_argument("--sfx-typing", action=argparse.BooleanOptionalAction, default=None, help="typewriter ticks")
+    g.add_argument("--sfx-typing-set", default=None, metavar="SET",
+                   help="typing sound: soft, typewriter, mechanical, pencil, bubble (or a folder in assets/sfx/typing)")
+    g.add_argument("--sfx-pause-set", default=None, metavar="SET",
+                   help="pause/resume sound: wood, clock, whoosh, chime, tape (or a folder in assets/sfx/pause)")
     g.add_argument("--style", default=None, metavar="PRESET", help="visual preset (see `app.py styles`)")
     g.add_argument("--format", dest="output_format", choices=config.OUTPUT_FORMATS, default=None,
                    help=f"output: tiktok 1080x1920, original aspect, landscape 1920x1080 (default {config.OUTPUT_FORMAT})")

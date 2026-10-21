@@ -17,3 +17,4 @@ numpy>=1.26
 gradio>=4.44
 # --- publishing ---
 tiktok-uploader>=1.1.0
+anthropic>=1.0              # Claude API (paid; optional provider)

@@ -17,6 +17,15 @@ import llm
 log = logging.getLogger(__name__)
 
 
+class NeedsReview(RuntimeError):
+    """Every answer of the model still fails the checks: the person picks / edits the moves
+    (recovery.py) instead of getting the best attempt silently. `attempts` are the answers."""
+
+    def __init__(self, attempts: list[dict], lo: int, hi: int):
+        super().__init__("Ответы нейросети не прошли проверку — выберите и поправьте варианты ходов.")
+        self.attempts, self.lo, self.hi = attempts, lo, hi
+
+
 class AnalysisError(RuntimeError):
     pass
 
@@ -419,6 +428,54 @@ def check_llm_moves(raw: list[LLMMove], segments: list[Segment], lo: int) -> lis
     return issues
 
 
+def move_issues(m: LLMMove, segments: list[Segment], hints=None, sides: dict | None = None,
+                names: dict[str, str] | None = None) -> list[str]:
+    """Problems of one move (the per-move part of check_llm_moves / check_speakers), in plain Russian."""
+    out = []
+    for field, ru in (("title", "заголовок"), ("explanation", "объяснение"), ("gist", "суть")):
+        if PLACEHOLDER_RE.match((getattr(m, field) or "").strip()):
+            out.append(f"Вместо текста заглушка в поле «{ru}»: «{getattr(m, field)}».")
+    head = re.split(r"\s+[—–-]\s+", m.title.strip(), maxsplit=1)[0].strip(" «»\"'—–-")
+    if m.title.strip().startswith(("—", "–", "-")) or len(head.split()) < 2:
+        out.append("Заголовок — только вердикт: нужна суть хода (2–6 слов), затем через тире вердикт.")
+    if m.strength is not None and abs(m.strength - TYPE_STRENGTH[m.move_type]) >= 2:
+        out.append(f"Тип «{m.move_type}» не совпадает с силой хода {m.strength:+d}.")
+    found = sorted({x.group(0).lower() for f in ("title", "explanation") for x in CLICHES.finditer(getattr(m, f))})
+    if found:
+        out.append("Штампы и канцелярит: " + ", ".join(f"«{w}»" for w in found[:4]) + ".")
+    if hints is not None and segments:
+        conf = {h.id: h for h in hints.confident(HINT_TRUST)}
+        labels = sorted({conf[i].label for i in _seg_range(m, len(segments)) if i in conf})
+        if len(labels) > 1:
+            out.append(f"Объединяет реплики разных людей (голоса {' и '.join(labels)}).")
+        elif labels and sides and sides.get(labels[0]) and sides[labels[0]] != m.speaker:
+            who = (names or {}).get(sides[labels[0]], sides[labels[0]])
+            out.append(f"Говорит голос {labels[0]} — это {who}, а ход отдан другой стороне.")
+    return out
+
+
+def review_issues(raw: list[LLMMove], segments: list[Segment], lo: int, hints=None,
+                  names: dict[str, str] | None = None) -> dict:
+    """{"general": [...], "moves": {index: [...]}} — what the recovery window shows for one answer."""
+    sides = hint_sides(raw, segments, hints) if hints is not None else {}
+    per = {k: iss for k, m in enumerate(raw) if (iss := move_issues(m, segments, hints, sides, names))}
+    general = []
+    if len(raw) < lo:
+        general.append(f"Слишком мало ходов: {len(raw)}, нужно минимум {lo}.")
+    brilliant = sum(mv.move_type == "Brilliant" for mv in raw)
+    if brilliant > max(1, len(raw) // 5):
+        general.append(f"«Brilliant» стоит у {brilliant} ходов — это для одного-двух ключевых моментов.")
+    if len(raw) >= 5:
+        top = max(set(mv.move_type for mv in raw), key=lambda t: sum(mv.move_type == t for mv in raw))
+        if sum(mv.move_type == top for mv in raw) / len(raw) > 0.7:
+            general.append(f"Почти все ходы — {top}: оценки однообразные.")
+    n = len(segments)
+    covered = {i for m in raw for i in _seg_range(m, n)} if n else set()
+    if n and len(covered) / n < 0.8:
+        general.append(f"Ходы не покрывают реплики {', '.join(str(i) for i in sorted(set(range(n)) - covered)[:12])}.")
+    return {"general": general, "moves": per}
+
+
 # minimum eval swing in favour of the mover (negative = against the mover)
 EVAL_MIN_SWING = {"Brilliant": 3.0, "Great": 2.0, "Best": 1.2, "Inaccuracy": -1.2, "Mistake": -2.5, "Blunder": -4.0}
 
@@ -535,6 +592,28 @@ SPEAKER_NOTE = """
 HINT_TRUST = 0.8  # hints at least this confident are enforced by check_speakers
 
 
+def extra_attempt(segments: list[Segment], white: str, black: str, context: str, provider, hints, previous: dict,
+                  n: int) -> dict:
+    """One more answer for the recovery window: the model sees its previous answer and the problems."""
+    lo, hi = target_moves(segments)
+    names = {"white": white, "black": black}
+    base = build_messages(segments, white, black, context, lo, hi, hints)
+    messages = base + [
+        {"role": "assistant", "content": (previous.get("reply") or "")[:6000]},
+        {"role": "user", "content": "Ответ не прошёл проверку:\n- " + "\n- ".join(previous.get("issues") or ["нужен другой вариант"])
+         + "\nИсправь и верни ТОЛЬКО корректный JSON {\"moves\": [...]}."},
+    ]
+    log.info("Запрос ещё одного варианта у %s…", provider.label)
+    reply = provider.chat(messages, llm_json_schema(lo, hi))
+    try:
+        raw = LLMAnalysis.model_validate(_as_moves_dict(extract_json(reply))).moves
+        issues = check_llm_moves(raw, segments, lo) + (check_speakers(raw, segments, hints, names) if hints is not None else [])
+    except (ValidationError, json.JSONDecodeError, ValueError) as e:
+        raw, issues = None, [f"Невалидный JSON: {str(e)[:1200]}"]
+    return {"n": n, "model": getattr(provider, "label", ""), "issues": issues, "reply": reply[:20000],
+            "moves": [m.model_dump() for m in raw] if raw is not None else None}
+
+
 def _hint_tag(h, names: dict[str, str], sides: dict[str, str | None]) -> str:
     if h is None or not h.label or h.conf < config.SPEAKER_HINT_MIN_CONF:
         return "голос ?"
@@ -588,9 +667,11 @@ def analyze(
     duration: float | None = None,
     provider=None,
     hints=None,
+    review: bool = False,
 ) -> list[Move]:
     """Ask the LLM for moves; on invalid JSON or failed semantic checks, retry with
-    the errors fed back. If retries run out, the best valid attempt is used.
+    the errors fed back. If retries run out, the best valid attempt is used — or, with
+    `review`, NeedsReview carries every answer so the person can choose and edit.
     `hints` (speakers.SpeakerHints) adds per-segment "who speaks" labels."""
     if not segments:
         raise AnalysisError("Transcript is empty — nothing to analyze")
@@ -602,6 +683,7 @@ def analyze(
     messages = base
     best: tuple[int, list[LLMMove]] | None = None
     last_err = ""
+    attempts: list[dict] = []
     for attempt in range(1, config.LLM_MAX_RETRIES + 1):
         log.info("Запрос к %s (попытка %d из %d), нужно %d–%d ходов…", provider.label, attempt, config.LLM_MAX_RETRIES, lo, hi)
         reply = provider.chat(messages, schema)
@@ -612,6 +694,8 @@ def analyze(
                 issues += check_speakers(raw, segments, hints, names)
         except (ValidationError, json.JSONDecodeError, ValueError) as e:
             raw, issues = None, [f"Невалидный JSON: {str(e)[:1200]}"]
+        attempts.append({"n": attempt, "model": getattr(provider, "label", ""), "issues": issues, "reply": reply[:20000],
+                         "moves": [m.model_dump() for m in raw] if raw is not None else None})
         if raw is not None and (best is None or len(issues) < best[0]):
             best = (len(issues), raw)
         if not issues:
@@ -627,6 +711,9 @@ def analyze(
         ]
     if best is None:
         raise AnalysisError(f"LLM failed to return valid JSON after {config.LLM_MAX_RETRIES} attempts: {last_err}")
+    if best[0] and review:
+        log.warning("Ответы не прошли проверку (замечаний в лучшем: %d) — выберите варианты в окне", best[0])
+        raise NeedsReview(attempts, lo, hi)
     if best[0]:
         log.warning("Беру лучший из ответов (осталось замечаний: %d)", best[0])
     raw = fix_speakers(best[1], segments, hints) if hints is not None else best[1]

@@ -588,7 +588,7 @@ def _ffmpeg_progress(cmd: list[str], what: str, total: float | None, progress=No
 
 def normalize(src: Path, dst: Path, start: float | None = None, duration: float | None = None, progress=None) -> Path:
     """Cut [start, start + duration) frame-accurately and re-encode to constant-fps
-    H.264/AAC so all later timings are exact. (-ss before -i with re-encoding seeks
+    H.264/AAC with square pixels so all later timings and proportions are exact. (-ss before -i with re-encoding seeks
     precisely; -t after -i is measured from the cut, like an editor's in/out points.)"""
     cmd = ["ffmpeg", "-y", "-v", "error"]
     if start:
@@ -596,8 +596,8 @@ def normalize(src: Path, dst: Path, start: float | None = None, duration: float 
     cmd += ["-i", str(src)]
     if duration is not None:
         cmd += ["-t", f"{duration:.3f}"]
-    cmd += [
-        "-vf", f"fps={config.FPS},setsar=1",
+    cmd += [  # anamorphic sources are resampled to square pixels (setsar alone would squash them); even size for x264
+        "-vf", f"fps={config.FPS},scale=trunc(iw*sar/2)*2:trunc(ih/2)*2,setsar=1",
         "-c:v", "libx264", "-preset", "fast", "-crf", "17", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
         "-movflags", "+faststart",

@@ -68,7 +68,7 @@ def build(gr) -> SimpleNamespace:
         if not choices:
             html += ("<div class='cdm-msg cdm-msg-warn'>⚠ Других доступных моделей сейчас нет: добавьте ключ сервиса "
                      "в разделе «Нейросеть» (Groq, Mistral, OpenRouter бесплатны) или запустите Ollama.</div>")
-        same_ok = kind not in ("auth", "model")
+        same_ok = kind not in ("auth", "model", "billing")  # the same paid model would fail again
         return {modal: gr.update(visible=True), title: f"### {head}", body: html,
                 alts: gr.update(choices=choices, value=choices[0][1] if choices else None, visible=bool(choices)),
                 ctx: {**(op or {}), "provider": provider, "model": model, "job": (op or {}).get("job") or (job.id if job else None)},

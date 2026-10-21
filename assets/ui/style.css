@@ -715,3 +715,100 @@ button.cdm-danger:hover { color: var(--cdm-error) !important; border-color: #ff5
   #style-preview-col { position: static; }
 }
 @media (max-width: 560px) { .cdm-actions button { white-space: normal !important; max-width: 100%; } }
+
+/* ================================================================== guided mode: stepper + mode switch */
+/* the flag only carries classes for the :has() rules of review.guided_css() */
+#mode-flag { display: none !important; }
+#main { min-width: 0 !important; gap: 0 !important; flex-wrap: nowrap !important; }
+#mode-btn { flex: 0 0 auto !important; white-space: nowrap; min-height: 36px; padding: 0 12px !important; font-size: 13px !important;
+  border-radius: var(--cdm-radius-control) !important; }
+#stepper { position: sticky; top: var(--cdm-header-height); z-index: 30; margin-top: 16px !important; padding: 10px 0 !important;
+  gap: 10px !important; align-items: center !important; flex-wrap: nowrap !important; background: var(--cdm-page);
+  border-bottom: 1px solid var(--cdm-divider); }
+#stepper > * { min-width: 0 !important; }
+#step-prev, #step-next { flex: 0 0 auto !important; white-space: nowrap; }
+#steps-nav { flex: 1 1 auto !important; padding: 0 !important; }
+#steps-nav .wrap { display: flex !important; flex-direction: row !important; flex-wrap: wrap !important; gap: 6px !important; }
+#steps-nav label { display: inline-flex !important; align-items: center !important; margin: 0 !important; padding: 6px 12px !important;
+  border-radius: 999px !important; border: 1px solid var(--cdm-border) !important; background: transparent !important;
+  color: var(--cdm-text-secondary) !important; font-size: 13px !important; line-height: 18px !important; white-space: nowrap;
+  cursor: pointer; transition: color .15s, background .15s, border-color .15s; box-shadow: none !important; }
+#steps-nav label:hover { color: var(--cdm-text) !important; background: var(--cdm-hover) !important; }
+#steps-nav label input { position: absolute; opacity: 0; pointer-events: none; width: 0 !important; height: 0 !important; }
+#steps-nav label:has(input:checked) { color: var(--cdm-primary) !important; border-color: var(--cdm-primary) !important;
+  background: var(--cdm-primary-soft) !important; font-weight: 600; }
+#steps-nav label:has(input:focus-visible) { outline: 2px solid var(--cdm-focus); outline-offset: 2px; }
+#step-hint { margin: 14px 0 0 !important; }
+#step-hint p { margin: 0 !important; font-size: 14px !important; line-height: 22px !important; color: var(--cdm-text-secondary) !important; }
+#step-hint strong { color: var(--cdm-text); font-weight: 600; }
+.sec-sub h3 { font-size: 16px !important; line-height: 24px !important; font-weight: 600 !important; margin: 18px 0 0 !important; }
+.sec-sub p { margin: 2px 0 0 !important; color: var(--cdm-text-secondary) !important; font-size: 13px !important; line-height: 20px !important; }
+#output-check p { margin: 0 !important; overflow-wrap: anywhere; }
+#g-analyze-hint p, #audio-hint p { margin: 0 !important; }
+/* long model names, file names and errors wrap instead of widening the page */
+#status, #status p, .cdm-source-title, .cdm-source-meta, #key-row + *, .hint p { overflow-wrap: anywhere; }
+@media (max-width: 860px) {
+  #stepper { position: static; flex-wrap: wrap !important; }
+  #steps-nav { order: -1; flex-basis: 100% !important; }
+  #steps-nav label { padding: 5px 10px !important; font-size: 12px !important; }
+  #step-next { margin-left: auto !important; }
+}
+@media (max-width: 600px) {
+  #mode-btn { font-size: 0 !important; gap: 0 !important; padding: 0 10px !important; }
+  #mode-btn img { margin: 0 !important; }
+  #hdr-search { flex: 0 1 140px !important; }
+}
+.cdm-logo { white-space: nowrap; min-width: 0; }
+@media (max-width: 600px) {
+  .cdm-logo { font-size: 15px; overflow: hidden; text-overflow: ellipsis; }
+  .cdm-brand { min-width: 0; }
+}
+
+/* sound picker: a list + ▶ chips to listen to every set before choosing */
+.cdm-sfx-col { gap: 8px !important; flex-wrap: nowrap !important; }
+.cdm-sfx-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.cdm-play { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--cdm-border); background: transparent; color: var(--cdm-text-secondary); font: inherit; font-size: 12px;
+  line-height: 16px; transition: color .15s, background .15s, border-color .15s; max-width: 100%; }
+.cdm-play svg { flex: none; }
+.cdm-play:hover { color: var(--cdm-text); background: var(--cdm-hover); }
+.cdm-play:focus-visible { outline: 2px solid var(--cdm-focus); outline-offset: 2px; }
+.cdm-play.is-playing { color: var(--cdm-primary); border-color: var(--cdm-primary); background: var(--cdm-primary-soft); }
+
+/* ================================================================== recovery: answers that failed the checks */
+#rec-modal { position: fixed !important; inset: 0; z-index: 1001; display: flex !important; align-items: center !important;
+  justify-content: center !important; padding: 24px; margin: 0 !important; background: rgba(0, 0, 0, .66);
+  backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); animation: cdm-fade .2s var(--cdm-ease-out); }
+#rec-card { width: min(1040px, 100%); height: auto !important; flex: 0 1 auto !important; max-height: min(92vh, 1000px);
+  overflow: auto; margin: auto !important; background: var(--cdm-surface-subtle) !important; border: 1px solid var(--cdm-border) !important;
+  border-radius: var(--cdm-radius-card) !important; padding: 18px 20px !important; box-shadow: 0 32px 96px rgba(0, 0, 0, .7);
+  animation: cdm-rise .28s var(--cdm-ease-out); gap: 10px !important; }
+#rec-intro p { margin: 4px 0 !important; color: var(--cdm-text-secondary); font-size: 14px; line-height: 21px; }
+#rec-intro .rec-left b { color: var(--cdm-warning); }
+#rec-grid { display: grid !important; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); gap: 16px !important; align-items: start !important; }
+#rec-grid > * { min-width: 0 !important; width: auto !important; flex-wrap: nowrap !important; }
+#rec-steps .wrap { display: flex !important; flex-direction: column !important; flex-wrap: nowrap !important; gap: 4px !important; }
+#rec-steps label { margin: 0 !important; padding: 8px 10px !important; border-radius: 10px !important; align-items: flex-start !important;
+  border: 1px solid var(--cdm-border-card) !important; background: var(--cdm-surface) !important; font-size: 13px !important; line-height: 18px !important; }
+#rec-steps label:has(input:checked) { border-color: var(--cdm-primary) !important; background: var(--cdm-primary-soft) !important; }
+#rec-steps label span { overflow-wrap: anywhere; }
+#rec-alts .wrap { display: flex !important; flex-direction: column !important; flex-wrap: nowrap !important; gap: 4px !important; }
+#rec-alts label { margin: 0 !important; font-size: 13px !important; line-height: 18px !important; overflow-wrap: anywhere; }
+#rec-form { gap: 8px !important; }
+.rec-lines { border: 1px solid var(--cdm-border-card); border-radius: 12px; padding: 10px 12px; background: var(--cdm-surface); }
+.rec-when { font: 600 12px/18px var(--font-sans, sans-serif); text-transform: uppercase; letter-spacing: .6px; color: var(--cdm-text-muted); }
+.rec-lines blockquote { margin: 4px 0 0; padding: 0; border: 0; color: var(--cdm-text); font-size: 14px; line-height: 21px; }
+@media (max-width: 760px) {
+  #rec-modal { padding: 10px; }
+  #rec-grid { grid-template-columns: minmax(0, 1fr); }
+}
+#rec-actions { position: sticky; bottom: -18px; z-index: 2; margin: 0 -20px -18px !important; padding: 12px 20px !important;
+  background: var(--cdm-surface-subtle); border-top: 1px solid var(--cdm-divider); }
+#sfx-pick { align-items: flex-start !important; }
+@media (max-width: 600px) {
+  #rec-actions { flex-wrap: wrap !important; gap: 6px !important; padding: 8px 12px !important; margin: 0 -20px -18px !important; }
+  #rec-actions button { flex: 1 1 auto !important; min-width: 0 !important; padding: 6px 10px !important; font-size: 13px !important; }
+  #rec-actions #rec-apply { flex-basis: 100% !important; }
+}
+#rec-card > *, #cast-card > *, #ai-card > * { flex-shrink: 0 !important; }   /* a scrolling card never squeezes its blocks */
+#rec-title h3 { margin: 0 !important; font-size: 18px !important; line-height: 26px !important; }

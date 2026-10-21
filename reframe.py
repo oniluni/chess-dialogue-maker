@@ -9,7 +9,9 @@ mode:
   * LETTERBOX: legacy VIDEO_MODE=fit, the whole frame on black.
 
 VIDEO_MODE=smart works per shot (cuts come from vision.py):
-  * a vertical source keeps its composition: fitted, never re-cropped;
+  * a vertical source keeps its composition: it fills the box only in shots whose
+    main faces all stay inside the window with room around them (a locked crop),
+    otherwise it is fitted whole over a blurred copy;
   * all faces of the shot fit into the window: a locked "camera" framing them,
     or a smoothed follow when a face travels across the frame;
   * faces too far apart: the camera eases to whoever is speaking (speaker hints),
@@ -33,7 +35,11 @@ log = logging.getLogger(__name__)
 
 CROP, FIT, LETTERBOX = 0, 1, 2
 VERTICAL_ASPECT = 0.7     # w/h at or below this counts as an already-vertical source
-MAX_STATIC_LOSS = 0.12    # vertical source: allow a cover crop only if it loses at most this much
+MAX_STATIC_LOSS = 0.12    # vertical source without faces: allow a cover crop only if it loses at most this much
+MAX_FACE_LOSS = 0.4       # vertical source: a face-guided crop may cut at most this share of the frame
+FACE_TOP_ROOM = 0.45      # vertical-source crop: room kept above the face box (hair), in face heights
+FACE_BOTTOM_ROOM = 0.3    # ... and below it (chin, neck)
+MIN_TRACK = 5             # face samples that make a face count in a shot even next to a long track
 FACE_MARGIN = 0.35        # extra room around faces, in face widths
 HEADROOM = 0.14           # top of the highest face sits this far below the window top
 PAN_S = 0.45              # s, speaker-focus camera move
@@ -105,12 +111,7 @@ def plan(
 
     loss = 1 - w * h
     if src_w / src_h <= VERTICAL_ASPECT:
-        if loss > MAX_STATIC_LOSS:
-            modes[:] = FIT
-        elif va is not None and va.faces:  # static crop, vertical position from the faces
-            ys[:] = np.clip(np.median([f.box[1] for f in va.faces]) - HEADROOM * h, 0, 1 - h)
-        log.info("Кадрирование: вертикальное видео — %s", "целиком на размытом фоне" if loss > MAX_STATIC_LOSS else "лёгкая обрезка")
-        return Plan(modes, xs, ys, w, h)
+        return _plan_vertical(va, n, fps, w, h, loss, modes, xs, ys)
     if va is None or loss < 0.01:
         return Plan(modes, xs, ys, w, h)
 
@@ -126,6 +127,110 @@ def plan(
     log.info("Кадрирование по сценам: %s", ", ".join(f"{_KIND_RU[k]} {v}" for k, v in stats.items() if v) or "по центру")
     log.debug("reframe: window %.2fx%.2f, shots %s", w, h, stats)
     return Plan(modes, np.clip(xs, 0, 1 - w), np.clip(ys, 0, 1 - h), w, h)
+
+
+def _plan_vertical(va, n, fps, w, h, loss, modes, xs, ys) -> Plan:
+    """A vertical source keeps its composition. Per shot it fills the box (a locked crop) only
+    when every main face of the shot stays inside the window with room around it; a shot
+    without faces is cropped only when that loses almost nothing. Everything else is fitted
+    whole over a blurred copy, so a face is never cut."""
+    small = loss <= MAX_STATIC_LOSS
+    if va is None or not va.faces:
+        if not small:
+            modes[:] = FIT
+        log.info("Кадрирование: вертикальное видео — %s", "лёгкая обрезка" if small else "целиком на размытом фоне")
+        return Plan(modes, xs, ys, w, h)
+    if small:  # shots without faces: the old static crop, placed by the faces of the whole clip
+        ys[:] = np.clip(np.median([f.box[1] for f in va.faces]) - HEADROOM * h, 0, 1 - h)
+    crop = fit = 0
+    for f0, f1 in va.shots():
+        f1 = min(f1, n)
+        if f0 >= f1:
+            continue
+        faces = va.faces_between(f0, f1)
+        pos = None
+        if loss <= MAX_FACE_LOSS:  # a locked crop, else one that follows the faces up and down
+            pos = _face_window(faces, w, h) or _face_follow(faces, f0, f1, w, h, fps)
+        if pos is not None:
+            xs[f0:f1], ys[f0:f1] = pos
+            crop += 1
+        elif faces or not small:
+            modes[f0:f1] = FIT
+            fit += 1
+        else:
+            crop += 1
+    if va.n_frames < n:  # decoded a frame or two more than vision saw: hold the last framing
+        xs[va.n_frames :], ys[va.n_frames :], modes[va.n_frames :] = xs[va.n_frames - 1], ys[va.n_frames - 1], modes[va.n_frames - 1]
+    parts = [f"по лицам на весь кадр {crop}" if crop else "", f"целиком на размытом фоне {fit}" if fit else ""]
+    log.info("Кадрирование: вертикальное видео, сцены — %s", ", ".join(p for p in parts if p) or "по центру")
+    log.debug("reframe: vertical source, window %.2fx%.2f, crop %d / fit %d shots", w, h, crop, fit)
+    return Plan(modes, np.clip(xs, 0, 1 - w), np.clip(ys, 0, 1 - h), w, h)
+
+
+def _main_faces(faces) -> list:
+    """The faces that must stay whole: not background faces, not one-off detections."""
+    biggest = max(f.box[3] for f in faces)
+    faces = [f for f in faces if f.box[3] >= 0.45 * biggest]  # background faces may be cut
+    seen: dict[int, int] = {}
+    for f in faces:
+        seen[f.track] = seen.get(f.track, 0) + 1
+    longest = max(seen.values())
+    return [f for f in faces if seen[f.track] >= min(MIN_TRACK, 0.15 * longest) or seen[f.track] == longest]
+
+
+def _extent(faces, fw: float, fh: float) -> tuple[float, float, float, float, float]:
+    """Room the faces need: left, top, right, bottom (with margins) and the top of the faces."""
+    face_top = min(f.box[1] for f in faces)
+    return (max(0.0, min(f.box[0] for f in faces) - FACE_MARGIN * fw), max(0.0, face_top - FACE_TOP_ROOM * fh),
+            min(1.0, max(f.box[0] + f.box[2] for f in faces) + FACE_MARGIN * fw),
+            min(1.0, max(f.box[1] + f.box[3] for f in faces) + FACE_BOTTOM_ROOM * fh), face_top)
+
+
+def _place(lo: float, hi: float, pref: float, size: float) -> float:
+    """Window start for the window `size` closest to `pref` that still holds [lo, hi]."""
+    return float(np.clip(min(max(pref, hi - size), lo), 0, 1 - size))
+
+
+def _face_window(faces, w: float, h: float) -> tuple[float, float] | None:
+    """Window position (x, y) that holds every main face of a shot with room around it
+    (hair above, chin below, a margin at the sides), or None if they do not fit."""
+    if not faces:
+        return None
+    main = _main_faces(faces)
+    fw, fh = float(np.median([f.box[2] for f in main])), float(np.median([f.box[3] for f in main]))
+    left, top, right, bottom, face_top = _extent(main, fw, fh)
+    if bottom - top > h + 1e-6 or right - left > w + 1e-6:
+        return None
+    # faces in the upper part of the window, like the wide shots
+    return _place(left, right, (left + right) / 2 - w / 2, w), _place(top, bottom, face_top - HEADROOM * h, h)
+
+
+def _face_follow(faces, f0: int, f1: int, w: float, h: float, fps: int) -> tuple[float, np.ndarray] | None:
+    """A crop that moves up and down with the faces (smoothed): at every sampled moment the
+    faces seen then must fit with room around them, and sideways they must fit all shot long."""
+    if not faces:
+        return None
+    main = _main_faces(faces)
+    fw, fh = float(np.median([f.box[2] for f in main])), float(np.median([f.box[3] for f in main]))
+    left, _, right, _, _ = _extent(main, fw, fh)
+    if right - left > w + 1e-6:
+        return None
+    by_frame: dict[int, list] = {}
+    for f in main:
+        by_frame.setdefault(f.frame, []).append(f)
+    frames, lo, hi, pref = [], [], [], []
+    for fr in sorted(by_frame):
+        _, top, _, bottom, face_top = _extent(by_frame[fr], fw, fh)
+        if bottom - top > h + 1e-6:
+            return None
+        frames.append(fr)
+        lo.append(max(0.0, bottom - h))   # lowest window start that still shows the chin
+        hi.append(min(top, 1 - h))        # highest one that still shows the hair
+        pref.append(_place(top, bottom, face_top - HEADROOM * h, h))
+    fr = np.array(frames)
+    y = _smooth(_interp_track(fr, np.array(pref), f0, f1), int(FOLLOW_S * fps))
+    y = np.clip(y, _interp_track(fr, np.array(lo), f0, f1), _interp_track(fr, np.array(hi), f0, f1))
+    return _place(left, right, (left + right) / 2 - w / 2, w), np.clip(y, 0, 1 - h)
 
 
 def _plan_shot(va, f0, f1, w, h, xs, ys, modes, fps, speaker_at) -> str:
@@ -222,8 +327,9 @@ class Framer:
             if s >= 0.75:  # sub-pixel accurate, so slow pans don't jitter
                 m = np.float32([[s, 0, -x * W * s], [0, s, -y * H * s]])
                 return cv2.warpAffine(frame, m, (self.bw, self.bh), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
-            x0, y0 = int(round(x * W)), int(round(y * H))
-            crop = frame[y0 : y0 + int(round(ch)), x0 : x0 + int(round(cw))]
+            cw_i, ch_i = min(W, int(round(cw))), min(H, int(round(ch)))
+            x0, y0 = min(int(round(x * W)), W - cw_i), min(int(round(y * H)), H - ch_i)  # never a short crop
+            crop = frame[y0 : y0 + ch_i, x0 : x0 + cw_i]
             return cv2.resize(crop, (self.bw, self.bh), interpolation=cv2.INTER_AREA)
 
         s = min(self.bw / W, self.bh / H)

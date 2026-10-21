@@ -84,13 +84,13 @@ WHISPER_COMPUTE_TYPE = _env("WHISPER_COMPUTE_TYPE", "int8")
 WHISPER_LANGUAGE = _env("WHISPER_LANGUAGE", "") or None  # None = autodetect
 
 # ---------------------------------------------------------------- LLM
-LLM_PROVIDERS = ("ollama", "pollinations", "github", "groq", "openrouter", "mistral", "gemini")  # see llm.SPECS
+LLM_PROVIDERS = ("ollama", "pollinations", "github", "groq", "openrouter", "mistral", "gemini", "anthropic")  # see llm.SPECS
 LLM_PROVIDER = _env("LLM_PROVIDER", "ollama")           # last choice; the web UI switches it at runtime and saves here
 LLM_MODEL = _env("LLM_MODEL", "")                       # model for LLM_PROVIDER ("" = the provider's default)
 OLLAMA_URL = _env("OLLAMA_URL", "http://localhost:11434")
-OLLAMA_MODEL = _env("OLLAMA_MODEL", "qwen2.5-coder")
+OLLAMA_MODEL = _env("OLLAMA_MODEL", "qwen3.5:9b")
 GEMINI_API_KEY = _env("GEMINI_API_KEY", "")
-GEMINI_MODEL = _env("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = _env("GEMINI_MODEL", "gemini-3.8-flash")
 LLM_LANGUAGE = _env("LLM_LANGUAGE", "русском")          # language of titles/explanations
 LLM_MAX_RETRIES = _env_int("LLM_MAX_RETRIES", 3)
 LLM_TEMPERATURE = _env_float("LLM_TEMPERATURE", 0.4)
@@ -122,6 +122,8 @@ SFX_VOLUME = _env_float("SFX_VOLUME", 0.8)              # 0..1
 SFX_PAUSE = _env_bool("SFX_PAUSE", True)                # individual sounds
 SFX_UNPAUSE = _env_bool("SFX_UNPAUSE", True)
 SFX_TYPING = _env_bool("SFX_TYPING", True)
+SFX_TYPING_SET = _env("SFX_TYPING_SET", "soft")    # sound sets: make_assets.TYPING_SETS / PAUSE_SETS
+SFX_PAUSE_SET = _env("SFX_PAUSE_SET", "wood")
 
 # ---------------------------------------------------------------- publishing
 TIKTOK_HEADLESS = _env_bool("TIKTOK_HEADLESS", False)

@@ -34,6 +34,7 @@ import errors
 import ingest
 import llm
 import moves_edit
+import recovery
 import renderer
 import sounds
 import speakers
@@ -84,6 +85,8 @@ class Job:
     sfx_pause: bool = config.SFX_PAUSE
     sfx_unpause: bool = config.SFX_UNPAUSE
     sfx_typing: bool = config.SFX_TYPING
+    sfx_typing_set: str = config.SFX_TYPING_SET
+    sfx_pause_set: str = config.SFX_PAUSE_SET
 
     # ------------------------------------------------------------ paths
     @property
@@ -133,7 +136,7 @@ class Job:
 
     @property
     def llm_label(self) -> str:
-        return f"{llm.spec(self.llm_provider).label} · {self.llm_model or llm.default_model(self.llm_provider)}"
+        return f"{llm.spec(self.llm_provider).label} · {llm.resolve_model(self.llm_provider, self.llm_model, offline=True)}"
 
     def load_speakers(self) -> speakers.SpeakerHints | None:
         if not self.speakers_file.exists():
@@ -237,15 +240,18 @@ def create_job(
         job.id += "x"
     # copy avatar uploads into the job: Gradio temp files disappear
     inputs = job.dir / "inputs"
-    for side, src in (("white", white_avatar), ("black", black_avatar)):
-        if src:
+    for side, upload in (("white", white_avatar), ("black", black_avatar)):
+        if upload:
             inputs.mkdir(parents=True, exist_ok=True)
-            dst = inputs / f"{side}{Path(src).suffix or '.png'}"
-            shutil.copy(Path(src).expanduser(), dst)
+            dst = inputs / f"{side}{Path(upload).suffix or '.png'}"
+            shutil.copy(Path(upload).expanduser(), dst)
             job.avatar_inputs[side] = str(dst)
     job.mode = mode if mode in ("auto", "manual") else "auto"
     job.source_title, job.source_channel, job.work_kind = source_title.strip(), source_channel.strip(), work_kind
     job.source_kind = source_kind or ("short" if "/shorts/" in job.source else "")
+    if not job.source_title and src.kind == "file":
+        # the cache keeps an upload as full.<ext>: the title comes from the file the person chose
+        job.source_title = Path(src.value).stem.replace("_", " ").strip()
     if not job.source_title:
         meta = ingest.source_meta(job.source)  # cached metadata / file name, no network
         job.source_title = meta.get("title", "")
@@ -436,16 +442,34 @@ def step_speakers(job: Job) -> speakers.SpeakerHints | None:
     return hints
 
 
-def step_analyze(job: Job) -> list[analyzer.Move]:
+class ReviewNeeded(RuntimeError):
+    """The model's answers failed the checks: the person chooses and edits them (recovery.py) —
+    the answers are saved, so nothing is asked again unless the person wants another answer."""
+
+    def __init__(self, job_id: str):
+        super().__init__("Ответы нейросети не прошли проверку — выберите и поправьте варианты ходов.")
+        self.job_id = job_id
+
+
+def step_analyze(job: Job, review: bool = True) -> list[analyzer.Move]:
+    """`review`: answers that still fail the checks after the retries go to the person
+    (ReviewNeeded + recovery.json) instead of silently taking the best one."""
     segments = analyzer.load_transcript(job.transcript)
     duration = ingest.probe(job.clip).duration
     hints = job.load_speakers() if job.speakers_file.exists() else step_speakers(job)
     log.info("▶ Разбор ходов нейросетью (%s)", job.llm_label)
+    recovery.Recovery.path(job.dir).unlink(missing_ok=True)  # a new analysis: the old answers no longer apply
     try:
         provider = llm.get_provider(job.llm_provider, job.llm_model or None)
         moves = analyzer.analyze(
-            segments, job.names["white"], job.names["black"], analysis_context(job), duration, provider=provider, hints=hints
+            segments, job.names["white"], job.names["black"], analysis_context(job), duration, provider=provider, hints=hints,
+            review=review,
         )
+    except analyzer.NeedsReview as e:
+        recovery.create(job.dir, e.attempts, e.lo, e.hi)
+        job.status, job.error = "review", None
+        job.save()
+        raise ReviewNeeded(job.id) from None
     except Exception as e:
         e.ai_stage = "analysis"  # the UI offers another model and repeats exactly this request
         raise
@@ -454,6 +478,45 @@ def step_analyze(job: Job) -> list[analyzer.Move]:
     job.status = "analyzed"
     job.save()
     return moves
+
+
+def recovery_inputs(job: Job) -> tuple[list[analyzer.Segment], object, dict[str, str]]:
+    """What recovery.py needs to show and check the answers: segments, speaker hints, names."""
+    return analyzer.load_transcript(job.transcript), job.load_speakers(), job.names
+
+
+def resolve_recovery(job: Job) -> list[analyzer.Move]:
+    """The moves from the person's choices in the recovery window; then the pipeline goes on."""
+    rec = recovery.pending(job.dir)
+    if rec is None:
+        raise ValueError("Нет ответов, ожидающих выбора — запустите разбор заново.")
+    segments, hints, names = recovery_inputs(job)
+    moves = recovery.resolve(job.dir, rec, segments, names, job.clip_duration() or None, hints)
+    job.save_moves(moves)
+    job.mode, job.status, job.error = "auto", "analyzed", None
+    job.save()
+    log.info("✓ Ходов в разборе: %d (варианты выбраны вручную)", len(moves))
+    return moves
+
+
+def recovery_more(job: Job) -> recovery.Recovery:
+    """One more answer from the model, told what was wrong with the current base answer."""
+    rec = recovery.pending(job.dir)
+    if rec is None:
+        raise ValueError("Нет ответов, ожидающих выбора — запустите разбор заново.")
+    segments, hints, names = recovery_inputs(job)
+    try:
+        provider = llm.get_provider(job.llm_provider, job.llm_model or None)
+        att = analyzer.extra_attempt(segments, names["white"], names["black"], analysis_context(job), provider, hints,
+                                     rec.attempts[rec.base], n=max(a.get("n", 0) for a in rec.attempts) + 1)
+    except Exception as e:
+        e.ai_stage = "analysis"
+        raise
+    rec = recovery.pending(job.dir)  # the person may have applied the choices meanwhile
+    if rec is None:
+        raise ValueError("Варианты уже применены — новый ответ не нужен.")
+    log.info("✓ Получен ещё один вариант (замечаний: %d)", len(att["issues"]) if att.get("moves") else -1)
+    return recovery.add_attempt(job.dir, rec, att)
 
 
 def analysis_context(job: Job) -> str:
@@ -587,16 +650,23 @@ def render_tags(job: Job, st: vstyle.VideoStyle) -> list | None:
     return sounds.render_tags(sounds.Sounds.load(job.dir), job.names)
 
 
-STAGES = ("faces", "summary")   # where run_all can stop for the person's review
+STAGES = ("clip", "faces", "summary", "moves")   # where run_all can stop for the person's review
 
 
-def run_all(job: Job, progress: Progress = _noop, until: str | None = None) -> Path | None:
-    """Runs every stage that has not produced its output yet (resumable). `until` stops after
-    "faces" (the characters dialog is next) or "summary" (the summary review is next)."""
+def run_all(job: Job, progress: Progress = _noop, until: str | None = None, review: bool = True) -> Path | None:
+    """Runs every stage that has not produced its output yet (resumable). `until` stops (and
+    returns None) after "clip" (downloaded and cut, before the speech recognition), "faces"
+    (the characters dialog is next), "summary" (the summary review is next) or "moves" (the
+    moves exist, before the avatars and the render). `review`: failed answers wait for the
+    person (ReviewNeeded) — also on a resume, without asking the model again."""
+    if until is not None and until not in STAGES:
+        raise ValueError(f"run_all: неизвестная остановка «{until}» (есть: {', '.join(STAGES)})")
     try:
         if not job.clip.exists():
             progress(0.02, "Проверка источника")
             step_ingest(job, lambda f, d: progress(0.02 + 0.12 * f, d))
+        if until == "clip":
+            return None
         if not job.transcript.exists():
             progress(0.15, "Распознавание речи")
             step_transcribe(job)
@@ -625,25 +695,148 @@ def run_all(job: Job, progress: Progress = _noop, until: str | None = None) -> P
                     log.warning("Сводка сцены не получилась (%s) — разбор пойдёт без неё", errors.explain(e).title)
         if until == "summary":
             return None
-        if not job.moves_file.exists():
+        if job.mode != "manual" and recovery.pending(job.dir) is not None:
+            # saved answers wait for a choice (also after a re-analysis over old moves): never ask the model again
+            if review:
+                raise ReviewNeeded(job.id)
+            moves = resolve_recovery(job)  # CLI: the choices made so far (else the best answer)
+        elif not job.moves_file.exists():
             if job.mode == "manual":
                 raise ValueError("Ходы ещё не собраны: откройте «Ручной разбор» и нажмите «Собрать ходы из разбора».")
             progress(0.35, "Разбор ходов нейросетью")
-            moves = step_analyze(job)
+            moves = step_analyze(job, review=review)
         else:
             moves = job.load_moves()
+        if until == "moves":
+            return None
         progress(0.5, "Аватарки")
         step_avatars(job, moves)
         return step_render(job, lambda f, d: progress(0.55 + 0.45 * f, d))
+    except ReviewNeeded:
+        job.status, job.error = "review", None
+        job.save()
+        raise
     except BaseException as e:
         job.status, job.error = "failed", errors.explain(e).title
         job.save()
         raise
 
 
+# ---------------------------------------------------------------- previews and checks for the guided steps
+def sound_preview(job: Job, opts: renderer.RenderOptions | None = None) -> Path:
+    """`preview/sound.wav`: how the render sounds around one paused move with these settings
+    (the job's own when `opts` is None). Starts at the first line of speech if the transcript
+    exists; needs only clip.mp4 (without it the sounds play over silence)."""
+    opts = opts or job.render_options()
+    at = 0.0
+    if job.transcript.exists():
+        try:
+            segments = analyzer.load_transcript(job.transcript)
+            at = segments[0].start if segments else 0.0
+        except Exception as e:  # a damaged transcript only moves the start
+            log.debug("sound preview: transcript: %s", e)
+    try:
+        st = vstyle.load_job_style(job.dir)
+    except Exception:
+        st = vstyle.DEFAULT
+    out = job.dir / "preview" / "sound.wav"
+    return renderer.sound_preview(job.clip if job.clip.exists() else None, opts, out, at=at, st=st)
+
+
+def clip_audio(job: Job) -> Path:
+    """`preview/clip_audio.m4a`: the sound of the cut fragment, for a plain player. Made once
+    per clip (it carries the clip's modification time, a new cut makes it again)."""
+    import os
+    import subprocess
+
+    if not job.clip.exists():
+        raise FileNotFoundError("Фрагмент ещё не скачан и не обрезан — сначала загрузите видео.")
+    out = job.dir / "preview" / "clip_audio.m4a"
+    mtime = job.clip.stat().st_mtime_ns
+    if out.exists() and out.stat().st_mtime_ns == mtime:
+        return out
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_suffix(".tmp.m4a")
+    base = ["ffmpeg", "-y", "-v", "error", "-i", str(job.clip), "-vn", "-map", "0:a:0"]
+    tail = ["-movflags", "+faststart", str(tmp)]
+    proc = subprocess.run(base + ["-c:a", "copy"] + tail, capture_output=True, text=True)
+    if proc.returncode != 0:  # not AAC inside: encode it
+        proc = subprocess.run(base + ["-c:a", "aac", "-b:a", "160k"] + tail, capture_output=True, text=True)
+    if proc.returncode != 0:
+        tmp.unlink(missing_ok=True)
+        log.debug("clip audio: %s", proc.stderr[-1000:])
+        raise RuntimeError("Не удалось извлечь звук фрагмента — в клипе нет звуковой дорожки?")
+    tmp.replace(out)
+    os.utime(out, ns=(mtime, mtime))
+    return out
+
+
+EXPECTED_SIZE = {"tiktok": (config.WIDTH, config.HEIGHT), "landscape": (1920, 1080)}
+FORMAT_RU = {"tiktok": "TikTok", "landscape": "горизонтального формата", "original": "формата «как в источнике»"}
+
+
+def output_check(job: Job) -> dict:
+    """ffprobe facts of final.mp4 and whether it is ready to publish in the job's format:
+    width, height, sar, dar, fps, duration, has_audio, size_mb, ok, problems (Russian)."""
+    import subprocess
+    from fractions import Fraction
+
+    facts = {"width": None, "height": None, "sar": None, "dar": None, "fps": None, "duration": None,
+             "has_audio": False, "size_mb": None, "ok": False, "problems": []}
+    problems = facts["problems"]
+    if not job.final.exists():
+        problems.append("Видео ещё не отрисовано.")
+        return facts
+    facts["size_mb"] = round(job.final.stat().st_size / 1e6, 1)
+    proc = subprocess.run(["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(job.final)],
+                          capture_output=True, text=True)
+    try:
+        data = json.loads(proc.stdout) if proc.returncode == 0 else {}
+    except ValueError:
+        data = {}
+    streams = data.get("streams", [])
+    v = next((x for x in streams if x.get("codec_type") == "video"), None)
+    a = next((x for x in streams if x.get("codec_type") == "audio"), None)
+    if v is None:
+        problems.append("Файл видео повреждён или в нём нет видеодорожки — отрисуйте видео заново.")
+        return facts
+    w, h = int(v.get("width", 0)), int(v.get("height", 0))
+    sar = v.get("sample_aspect_ratio") or "N/A"
+    try:
+        fps = float(Fraction(v.get("avg_frame_rate", "0/1")))
+        r_fps = float(Fraction(v.get("r_frame_rate", "0/1")))
+    except (ValueError, ZeroDivisionError):
+        fps = r_fps = 0.0
+    duration = float(data.get("format", {}).get("duration") or v.get("duration") or 0)
+    facts.update(width=w, height=h, sar=sar, dar=v.get("display_aspect_ratio") or "N/A", fps=round(fps, 3),
+                 duration=round(duration, 2), has_audio=a is not None)
+    fmt = job.output_format
+    want = EXPECTED_SIZE.get(fmt)
+    if want is not None and (w, h) != want:
+        problems.append(f"Размер {w}×{h} вместо {want[0]}×{want[1]} для {FORMAT_RU.get(fmt, fmt)}.")
+    elif want is None and w != config.WIDTH:
+        problems.append(f"Ширина {w} вместо {config.WIDTH} для {FORMAT_RU.get(fmt, fmt)}.")
+    if w % 2 or h % 2:
+        problems.append(f"Нечётный размер кадра {w}×{h}: часть плееров его не покажет.")
+    if sar not in ("1:1", "N/A", "0:1"):
+        problems.append(f"Пиксели не квадратные (SAR {sar}): картинка может растянуться — отрисуйте видео заново.")
+    if v.get("codec_name") != "h264" or v.get("pix_fmt") != "yuv420p":
+        problems.append(f"Кодек {v.get('codec_name')} / {v.get('pix_fmt')} вместо H.264 / yuv420p.")
+    if fps <= 0 or abs(fps - r_fps) > 0.01 or abs(fps - config.FPS) > 0.05:
+        problems.append(f"Частота кадров {fps:.2f} вместо постоянных {config.FPS} к/с.")
+    if a is None:
+        problems.append("В видео нет звука.")
+    elif a.get("codec_name") != "aac":
+        problems.append(f"Звук в формате {a.get('codec_name')} вместо AAC.")
+    if duration < 1:
+        problems.append("Видео короче секунды.")
+    facts["ok"] = not problems
+    return facts
+
+
 # files that depend on the clip's content: a new cut invalidates all of them
 CLIP_DERIVED = ("clip.mp4", "transcript.json", "speakers.json", "vision.json", "moves.json", "final.mp4", "faces", "avatars",
-                "cast.json")  # faces are proposed again (the project still knows the characters)
+                "recovery.json", "cast.json")  # faces are proposed again (the project still knows the characters)
 
 
 def recut(job: Job, start: str | None, end: str | None) -> bool:
@@ -753,9 +946,17 @@ def import_dialogue(job: Job) -> dialogue.Dialogue:
     return d
 
 
+def discard_recovery(job: Job) -> None:
+    """Forget answers waiting for a choice (the person made the moves another way or starts over)."""
+    recovery.Recovery.path(job.dir).unlink(missing_ok=True)
+    if job.status == "review":
+        job.status = "analyzed" if job.moves_file.exists() else "transcribed"
+
+
 def save_manual_moves(job: Job, moves: list[analyzer.Move]) -> None:
     """Moves built in an editor: the first edit keeps the original analysis as a backup."""
     moves_edit.ensure_backup(job.dir)
+    discard_recovery(job)
     job.save_moves(moves)
     job.status = "analyzed"
     job.save()
@@ -778,5 +979,7 @@ def update_moves_json(job: Job, text: str) -> list[analyzer.Move]:
     """Validate user-edited JSON and store it (raises on invalid input)."""
     duration = ingest.probe(job.clip).duration if job.clip.exists() else None
     moves = analyzer.parse_moves(text, duration)
+    discard_recovery(job)
     job.save_moves(moves)
+    job.save()
     return moves

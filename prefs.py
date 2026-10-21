@@ -23,8 +23,11 @@ def defaults() -> dict:
         "sfx_pause": config.SFX_PAUSE,
         "sfx_unpause": config.SFX_UNPAUSE,
         "sfx_typing": config.SFX_TYPING,
+        "sfx_typing_set": config.SFX_TYPING_SET,
+        "sfx_pause_set": config.SFX_PAUSE_SET,
         "style_preset": "Chess.com",        # last preset picked in the style editor
         "review_before_analysis": True,     # stop for the characters and the scene summary before the LLM
+        "ui_mode": "guided",                # guided (seven steps) | advanced (every setting at once)
     }
 
 

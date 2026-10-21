@@ -35,13 +35,16 @@ _RULES: list[tuple[str, str, str]] = [
     (r"(API_KEY_INVALID|API key not valid|PERMISSION_DENIED|401 UNAUTHENTICATED)",
      "Gemini отклонил ключ API.",
      "Проверьте GEMINI_API_KEY в .env (ключ мог быть отозван) или выберите Ollama."),
-    (r"(\\b429\\b|(?-i:RESOURCE_EXHAUSTED)|exceeded your current quota)",
+    (r"(free_tier\S*,? limit: 0|limit: 0\b|BILLING_DISABLED|billing to be enabled|requires (an )?active billing)",
+     "Эта модель Gemini не входит в бесплатный тариф — нужна оплата.",
+     "Включите оплату (Billing) для проекта в AI Studio — ключ останется тем же — или выберите gemini-3.8-flash / gemini-3.5-flash-lite."),
+    (r"((?-i:RESOURCE_EXHAUSTED)|exceeded your current quota)",
      "Исчерпан лимит запросов Gemini (бесплатный тариф).",
      "Подождите минуту и нажмите «Продолжить выбранное», выберите другую модель Gemini (например, Flash-Lite) или Ollama."),
-    (r"(\\b503\\b|(?-i:UNAVAILABLE)|model is overloaded|high demand)",
+    (r"((?-i:UNAVAILABLE)|model is overloaded|high demand)",
      "Gemini сейчас перегружен (ошибка 503). Это временно, на стороне Google.",
      "Подождите 1–2 минуты и нажмите «Продолжить выбранное» — или выберите другую модель / Ollama."),
-    (r"(\\b500 INTERNAL|\\b502 Bad Gateway|\\b504\\b|(?-i:DEADLINE_EXCEEDED))",
+    (r"(\b500 INTERNAL|\b502 Bad Gateway|(?-i:DEADLINE_EXCEEDED))",
      "Сервер Gemini ответил ошибкой.",
      "Обычно это временно: нажмите «Продолжить выбранное» через минуту или выберите другую модель."),
     (r"(404 NOT_FOUND.*models/|is not found for API version|not supported for generateContent)",
@@ -100,6 +103,12 @@ _RULES: list[tuple[str, str, str]] = [
     (r"Source \(URL or file path\) is required",
      "Не указан источник видео.",
      "Вставьте ссылку, загрузите файл или найдите ролик по названию."),
+    (r"Ответы нейросети не прошли проверку",
+     "Ответы нейросети не прошли проверку.",
+     "Выберите лучший вариант для каждого хода в окне вариантов (кнопка «Разобрать диалог» или «Продолжить выбранное»)."),
+    (r"No such file or directory: '[^']*transcript\.json'",
+     "Речь ещё не распознана.",
+     "Сводка и разбор строятся по распознанной речи: нажмите «Разобрать диалог» (или «Создать видео») — распознавание идёт первым."),
     # ---- local tools
     (r"No such file or directory: '(ffmpeg|ffprobe)'",
      "Не установлен ffmpeg.",
@@ -136,8 +145,9 @@ _RULES: list[tuple[str, str, str]] = [
 
 
 def explain(e: BaseException) -> Explained:
-    if getattr(e, "title", None):  # llm.LLMError and friends carry their own Russian explanation
-        return Explained(e.title, getattr(e, "hint", ""))
+    # llm.LLMError (and friends with .title) already carry their Russian explanation: pass it through unchanged
+    if getattr(e, "title", None):
+        return Explained(e.title, getattr(e, "hint", "") or "")
     text = f"{type(e).__name__}: {e}"
     cause = e.__cause__ or e.__context__
     if cause is not None:
@@ -170,17 +180,25 @@ AI_KINDS: dict[str, tuple[str, str]] = {
                 "Проверьте интернет; для Ollama запустите `ollama serve`. Или выберите другой сервис."),
     "output": ("Модель ответила некорректно",
                "Маленькие модели иногда путаются в формате ответа — обычно помогает модель покрупнее."),
+    "billing": ("Нужна оплата",
+                "Модель платная или на балансе закончились деньги. Пополните баланс (Claude — console.anthropic.com → "
+                "Billing; Gemini — включите оплату проекта в AI Studio, ключ тот же) или выберите бесплатный сервис: "
+                "Gemini Flash, Mistral, Groq, OpenRouter «:free» или Ollama."),
     "other": ("Сбой нейросети", "Повторите запрос или выберите другую модель."),
 }
 _AI_PATTERNS: list[tuple[str, str]] = [
-    ("auth", r"(не принял ключ|нужен ключ|не задан ключ|API key not valid|API_KEY_INVALID|UNAUTHENTICATED|\b401\b|\b403\b)"),
+    # first: a paid model / empty balance also carries 429/403-like texts (Gemini "limit: 0", Anthropic 400)
+    ("billing", r"(нужна оплата|закончились кредиты|credit balance is too low|purchase credits|BILLING_DISABLED|"
+                r"billing to be enabled|requires (an )?active billing|free_tier\S*,? limit: 0|insufficient (credit|balance|funds))"),
+    ("auth", r"(не принял ключ|нужен ключ|не задан ключ|API key not valid|API_KEY_INVALID|UNAUTHENTICATED|"
+             r"authentication_error|invalid x-api-key|\b401\b|\b403\b)"),
     ("limit", r"(лимит|\b429\b|\b402\b|quota|RESOURCE_EXHAUSTED|rate.?limit)"),
-    ("model", r"(нет модели|не скачана|404|not found for API|not supported for generateContent|model .*not found)"),
+    ("model", r"(нет модели|не скачана|404|not found for API|not supported for generateContent|model .*not found|not_found_error)"),
     ("offline", r"(не запущена|нет связи|не удалось связаться|not reachable|Name or service not known|Network is unreachable|"
                 r"Temporary failure in name resolution|ConnectionError|Max retries exceeded)"),
-    ("temporary", r"(перегружен|временн|\b50[0234]\b|UNAVAILABLE|DEADLINE_EXCEEDED|не ответил|не успела|timed? ?out|"
-                  r"оборвал|Server disconnected|Connection reset)"),
-    ("output", r"(некорректн|valid JSON|непонятн|пуст(ую|ой) (ответ|сводку)|рассуждения|LLM failed)"),
+    ("temporary", r"(перегружен|временн|\b50[0234]\b|\b529\b|overloaded|UNAVAILABLE|DEADLINE_EXCEEDED|не ответил|"
+                  r"не успела|timed? ?out|оборвал|Server disconnected|Connection reset)"),
+    ("output", r"(некорректн|valid JSON|непонятн|пуст(ую|ой) (ответ|сводку)|рассуждения|обрезан|LLM failed)"),
 ]
 
 
