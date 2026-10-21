@@ -4,11 +4,11 @@ import type { Names } from "../names.ts";
 import type { FrameFaces } from "../../shared/people.ts";
 import type { SceneAvatars } from "./avatar.ts";
 import { getSoundEvents, soundKindLabel } from "../analysis/sound-events.ts";
-import { HEIGHT, setCanvasSize, WIDTH } from "./canvas.ts";
+import { CANVAS_H, CANVAS_W, HEIGHT, setCanvasSize, WIDTH } from "./canvas.ts";
 import { bodyChars, introSpec, specFor } from "./card-spec.ts";
 import type { CardSpec, CardText } from "./card-spec.ts";
 import { fittedSize, initials } from "./player-text.ts";
-import { drawVideo } from "./video.ts";
+import { drawVideo, drawVideoIn } from "./video.ts";
 import { getStyle } from "./style.ts";
 import type { TranscriptSegment } from "../analysis/transcript.ts";
 import { getScheduleOptions } from "../session.ts";
@@ -318,6 +318,7 @@ export function createScene(
   function drawSoundTag(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
     time: number,
+    at: { x: number; y: number },
   ): void {
     const events = getSoundEvents();
     let current: (typeof events)[number] | undefined;
@@ -340,8 +341,8 @@ export function createScene(
     const padding = 22;
     const width = ctx.measureText(label).width + padding * 2;
     const height = 52;
-    const x = 40;
-    const y = uiHeight + 40;
+    const x = at.x;
+    const y = at.y;
 
     ctx.globalAlpha = 0.82;
     ctx.fillStyle = "#14120f";
@@ -359,6 +360,7 @@ export function createScene(
   function drawSubtitle(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
     time: number,
+    area: { x: number; w: number; bottom: number },
   ): void {
     if (subtitles === null || !getScheduleOptions().subtitles) return;
     const line = subtitles.find((segment) => time >= segment.start && time <= segment.end);
@@ -368,7 +370,7 @@ export function createScene(
     ctx.textAlign = "center";
     ctx.textBaseline = "bottom";
     setFont(ctx, 400, 34);
-    const maxWidth = WIDTH - 120;
+    const maxWidth = area.w - 120;
     const words = line.text.split(/\s+/);
     const lines: string[] = [];
     let current = "";
@@ -384,57 +386,76 @@ export function createScene(
     if (current !== "") lines.push(current);
 
     const lineHeight = 44;
-    const bottom = HEIGHT - 70;
+    const bottom = area.bottom;
     const top = bottom - lines.length * lineHeight;
     ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
-    ctx.fillRect(0, top - 14, WIDTH, lines.length * lineHeight + 28);
+    ctx.fillRect(area.x, top - 14, area.w, lines.length * lineHeight + 28);
     ctx.fillStyle = "#ffffff";
     lines.forEach((text, index) => {
-      ctx.fillText(text, WIDTH / 2, top + (index + 1) * lineHeight - 10);
+      ctx.fillText(text, area.x + area.w / 2, top + (index + 1) * lineHeight - 10);
     });
     ctx.restore();
   }
 
+  function drawUi(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    state: FrameState,
+  ): void {
+    const current = cards[state.moveIndex];
+    if (state.moveIndex < 0 || current === undefined) {
+      drawCard(ctx, introCard, intro, TOP_MARGIN, cardHeight, 1, 1, 1);
+    } else if (state.cardMix < 1) {
+      const previousIndex = state.moveIndex - 1;
+      const previousCard = cards[previousIndex];
+      const previousSpec = specs[previousIndex];
+      if (previousCard !== undefined && previousSpec !== undefined) {
+        drawCard(ctx, previousCard, previousSpec, TOP_MARGIN, cardHeight, 1, 1, 1);
+      } else {
+        drawCard(ctx, introCard, intro, TOP_MARGIN, cardHeight, 1, 1, 1);
+      }
+      const spec = specs[state.moveIndex];
+      if (spec !== undefined) {
+        drawCard(ctx, current, spec, TOP_MARGIN, cardHeight, state.cardMix, state.iconScale, state.typed);
+      }
+    } else {
+      const spec = specs[state.moveIndex];
+      if (spec !== undefined) {
+        drawCard(ctx, current, spec, TOP_MARGIN, cardHeight, 1, state.iconScale, state.typed);
+      }
+    }
+
+    ctx.fillStyle = getStyle().playersBg;
+    ctx.fillRect(0, playersTop, WIDTH, PLAYERS_H);
+    drawPlayer(ctx, names.white, "White", playersTop, true, avatars?.white ?? null);
+    drawPlayer(ctx, names.black, "Black", playersTop, false, avatars?.black ?? null);
+    drawEval(ctx, state.evalScore, evalTop);
+  }
   return {
-    width: WIDTH,
-    height: HEIGHT,
+    width: CANVAS_W,
+    height: CANVAS_H,
     draw(ctx, source, state, time) {
       ctx.save();
       ctx.globalAlpha = 1;
       ctx.fillStyle = getStyle().pageBg;
       ctx.fillRect(0, 0, WIDTH, HEIGHT);
-      drawVideo(ctx, source, uiHeight, time, frames);
-      drawSoundTag(ctx, time);
-      drawSubtitle(ctx, time);
-
-      const current = cards[state.moveIndex];
-      if (state.moveIndex < 0 || current === undefined) {
-        drawCard(ctx, introCard, intro, TOP_MARGIN, cardHeight, 1, 1, 1);
-      } else if (state.cardMix < 1) {
-        const previousIndex = state.moveIndex - 1;
-        const previousCard = cards[previousIndex];
-        const previousSpec = specs[previousIndex];
-        if (previousCard !== undefined && previousSpec !== undefined) {
-          drawCard(ctx, previousCard, previousSpec, TOP_MARGIN, cardHeight, 1, 1, 1);
-        } else {
-          drawCard(ctx, introCard, intro, TOP_MARGIN, cardHeight, 1, 1, 1);
-        }
-        const spec = specs[state.moveIndex];
-        if (spec !== undefined) {
-          drawCard(ctx, current, spec, TOP_MARGIN, cardHeight, state.cardMix, state.iconScale, state.typed);
-        }
+      const landscape = CANVAS_W !== WIDTH;
+      if (landscape) {
+        const panelW = Math.round(CANVAS_W * 0.42);
+        drawVideoIn(ctx, source, { x: panelW, y: 0, w: CANVAS_W - panelW, h: CANVAS_H }, time, frames);
+        const scale = Math.min(panelW / WIDTH, CANVAS_H / uiHeight);
+        ctx.save();
+        ctx.translate((panelW - WIDTH * scale) / 2, (CANVAS_H - uiHeight * scale) / 2);
+        ctx.scale(scale, scale);
+        drawUi(ctx, state);
+        ctx.restore();
+        drawSoundTag(ctx, time, { x: panelW + 24, y: 32 });
+        drawSubtitle(ctx, time, { x: panelW, w: CANVAS_W - panelW, bottom: CANVAS_H - 40 });
       } else {
-        const spec = specs[state.moveIndex];
-        if (spec !== undefined) {
-          drawCard(ctx, current, spec, TOP_MARGIN, cardHeight, 1, state.iconScale, state.typed);
-        }
+        drawVideo(ctx, source, uiHeight, time, frames);
+        drawSoundTag(ctx, time, { x: 40, y: uiHeight + 40 });
+        drawSubtitle(ctx, time, { x: 0, w: CANVAS_W, bottom: CANVAS_H - 70 });
+        drawUi(ctx, state);
       }
-
-      ctx.fillStyle = getStyle().playersBg;
-      ctx.fillRect(0, playersTop, WIDTH, PLAYERS_H);
-      drawPlayer(ctx, names.white, "White", playersTop, true, avatars?.white ?? null);
-      drawPlayer(ctx, names.black, "Black", playersTop, false, avatars?.black ?? null);
-      drawEval(ctx, state.evalScore, evalTop);
       ctx.restore();
     },
   };

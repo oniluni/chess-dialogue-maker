@@ -7,11 +7,14 @@ import type {
 export class LlmError extends Error {
   readonly title: string;
   readonly hint: string;
+  /** HTTP status of the provider answer, when there was one. */
+  readonly status: number;
 
-  constructor(title: string, hint = "") {
+  constructor(title: string, hint = "", status = 502) {
     super(title);
     this.title = title;
     this.hint = hint;
+    this.status = status;
   }
 }
 
@@ -171,9 +174,48 @@ function summarise(raw: string): string {
   return clean.slice(0, 300);
 }
 
+/** Turns a provider answer into a title and a hint the person can act on. */
+function explain(status: number, detail: string): { title: string; hint: string } | null {
+  const lower = detail.toLowerCase();
+  if (status === 401 || status === 403) {
+    return {
+      title: "The provider rejected the key",
+      hint: "Check the key in .env, then restart the backend.",
+    };
+  }
+  if (status === 404) {
+    return {
+      title: "The model is not available",
+      hint: "Pick another model from the list, or check the model id.",
+    };
+  }
+  if (status === 429) {
+    return {
+      title: "The provider is rate limiting",
+      hint: "Wait a minute, or switch to another provider or model.",
+    };
+  }
+  if (status === 413 || lower.includes("context") || lower.includes("too long") || lower.includes("too many tokens")) {
+    return {
+      title: "The request is too long for this model",
+      hint: "Shorten the clip or split it, then run the analysis again.",
+    };
+  }
+  if (status >= 500) {
+    return {
+      title: "The provider is having trouble",
+      hint: "Retry in a little while, or switch to another provider.",
+    };
+  }
+  return null;
+}
+
 async function readJson(response: Response, label: string): Promise<unknown> {
   const raw = await response.text();
-  if (!response.ok) throw new LlmError(`${label} answered ${response.status}`, summarise(raw));
+  if (!response.ok) {
+    const known = explain(response.status, raw);
+    throw new LlmError(known?.title ?? `${label} answered ${response.status}`, known?.hint ?? summarise(raw), response.status);
+  }
   try {
     return JSON.parse(raw) as unknown;
   } catch {
@@ -197,7 +239,11 @@ async function requestJson(
       signal: AbortSignal.timeout(180_000),
     });
   } catch (error) {
-    throw new LlmError(`${label} is unreachable`, error instanceof Error ? error.message : String(error));
+    throw new LlmError(
+      `${label} is unreachable`,
+      `Check the network and the base URL for ${label}. ${error instanceof Error ? error.message : String(error)}`,
+      503,
+    );
   }
   return readJson(response, label);
 }

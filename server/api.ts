@@ -1,4 +1,4 @@
-import { createReadStream } from "node:fs";
+﻿import { createReadStream } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { ErrorResponse, HealthResponse } from "../shared/api.ts";
@@ -14,6 +14,7 @@ import { diarize } from "./speakers.ts";
 import { analyzeFrames } from "./vision.ts";
 import { SAMPLE_RATE, decodeWav } from "./wav.ts";
 import { detectProsody } from "./prosody.ts";
+import { deleteProject, listProjects, loadProject, saveProject } from "./projects.ts";
 import { classify, SOUND_MODEL } from "./yamnet.ts";
 import { defaultLanguage, modelName, transcribe } from "./transcribe.ts";
 
@@ -234,7 +235,7 @@ function fail(response: ServerResponse, error: unknown): void {
     sendJson(response, 502, body);
     return;
   }
-  // Anything else Ã¢â‚¬â€Ã‚Â a missing model file, a crashed pipeline Ã¢â‚¬â€Ã‚Â still has to reach the UI.
+  // Anything else ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬ÂÃƒâ€šÃ‚Â a missing model file, a crashed pipeline ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬ÂÃƒâ€šÃ‚Â still has to reach the UI.
   console.error("request failed:", error);
   const hint = error instanceof Error ? error.message : String(error);
   const body: LlmErrorBody = { error: "llm_error", title: "The request failed", hint };
@@ -331,6 +332,39 @@ export async function handleApi(
     return;
   }
 
+  if (url.pathname === "/api/projects") {
+    try {
+      if (method === "GET") {
+        const id = url.searchParams.get("id");
+        if (id === null) {
+          sendJson(response, 200, { projects: await listProjects() });
+        } else {
+          const project = await loadProject(id);
+          if (project === null) throw new BadRequest("No such project");
+          sendJson(response, 200, project);
+        }
+        return;
+      }
+      if (method === "POST") {
+        const body = await readJsonBody(request);
+        if (!isRecord(body)) throw new BadRequest("The request body must be a JSON object");
+        const name = typeof body["name"] === "string" ? body["name"] : "";
+        const summary = await saveProject(name, body["data"]);
+        sendJson(response, 201, summary);
+        return;
+      }
+      if (method === "DELETE") {
+        const id = url.searchParams.get("id");
+        if (id === null) throw new BadRequest("No project id");
+        sendJson(response, 200, { removed: await deleteProject(id) });
+        return;
+      }
+      return methodNotAllowed(response);
+    } catch (error) {
+      fail(response, error);
+    }
+    return;
+  }
   if (url.pathname === "/api/sounds") {
     if (method !== "POST") return methodNotAllowed(response);
     try {
@@ -426,6 +460,7 @@ export async function handleApi(
     return;
   }
 }
+
 
 
 
