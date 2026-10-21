@@ -3,12 +3,14 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { ErrorResponse, HealthResponse } from "../shared/api.ts";
 import type { LlmChatMessage, LlmChatRequest, LlmErrorBody } from "../shared/llm.ts";
+import type { FacesRequest } from "../shared/people.ts";
 import type { DiarizationRequest, DiarizationResponse } from "../shared/speakers.ts";
 import type { TranscriptionResponse } from "../shared/transcribe.ts";
 import { fileOf, removeJob, startDownload, statusOf } from "./download.ts";
 import type { DownloadRequest } from "./download.ts";
 import { chat, LlmError, models, providers } from "./llm.ts";
 import { diarize } from "./speakers.ts";
+import { analyzeFrames } from "./vision.ts";
 import { defaultLanguage, modelName, transcribe } from "./transcribe.ts";
 import { decodeWav } from "./wav.ts";
 
@@ -167,6 +169,28 @@ function speakersRequest(value: unknown): DiarizationRequest {
   return { wav, segments };
 }
 
+function facesRequest(value: unknown): FacesRequest {
+  if (!isRecord(value)) throw new BadRequest("The request body must be a JSON object");
+  const raw = value["frames"];
+  if (!Array.isArray(raw) || raw.length === 0) throw new BadRequest('"frames" must be a non-empty array');
+  if (raw.length > 80) throw new BadRequest("Too many frames");
+
+  const frames = raw.map((item, index) => {
+    if (!isRecord(item)) throw new BadRequest(`frames[${index}] must be an object`);
+    const time = item["time"];
+    const width = item["width"];
+    const height = item["height"];
+    const rgb = item["rgb"];
+    if (typeof time !== "number" || !Number.isFinite(time)) throw new BadRequest(`frames[${index}]: bad time`);
+    if (typeof width !== "number" || typeof height !== "number" || width <= 0 || height <= 0) {
+      throw new BadRequest(`frames[${index}]: bad size`);
+    }
+    if (typeof rgb !== "string" || rgb === "") throw new BadRequest(`frames[${index}]: bad pixels`);
+    return { time, width: Math.round(width), height: Math.round(height), rgb };
+  });
+  return { frames };
+}
+
 function mediaType(name: string): string {
   if (name.endsWith(".mp4") || name.endsWith(".m4v")) return "video/mp4";
   if (name.endsWith(".webm")) return "video/webm";
@@ -185,7 +209,7 @@ function fail(response: ServerResponse, error: unknown): void {
     sendJson(response, 502, body);
     return;
   }
-  // Anything else â€” a missing model file, a crashed pipeline â€” still has to reach the UI.
+  // Anything else — a missing model file, a crashed pipeline — still has to reach the UI.
   console.error("request failed:", error);
   const hint = error instanceof Error ? error.message : String(error);
   const body: LlmErrorBody = { error: "llm_error", title: "The request failed", hint };
@@ -318,6 +342,23 @@ export async function handleApi(
       if (wav.length === 0) throw new BadRequest("The request has no audio");
       const result: DiarizationResponse = await diarize(decodeWav(wav), payload.segments);
       sendJson(response, 200, result);
+    } catch (error) {
+      fail(response, error);
+    }
+    return;
+  }
+
+  if (url.pathname === "/api/faces") {
+    if (method !== "POST") return methodNotAllowed(response);
+    try {
+      const payload = facesRequest(await readJsonBody(request, MAX_AUDIO_BYTES));
+      const frames = payload.frames.map((frame) => ({
+        time: frame.time,
+        width: frame.width,
+        height: frame.height,
+        rgb: Uint8Array.from(Buffer.from(frame.rgb, "base64")),
+      }));
+      sendJson(response, 200, await analyzeFrames(frames));
     } catch (error) {
       fail(response, error);
     }

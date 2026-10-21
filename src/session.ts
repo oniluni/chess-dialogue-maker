@@ -159,4 +159,5 @@ export function closeClip(): void {
   transcript = [];
   recovery = null;
   dialogue = null;
+  speakerHints = null;
 }
