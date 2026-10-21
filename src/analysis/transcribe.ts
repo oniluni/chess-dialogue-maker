@@ -1,23 +1,7 @@
 import type { TranscriptionInfo, TranscriptionResponse } from "../../shared/transcribe.ts";
+import { errorMessage, isRecord } from "../net/http.ts";
 import { parseTranscript } from "./transcript.ts";
 import type { TranscriptSegment } from "./transcript.ts";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-async function errorMessage(response: Response): Promise<string> {
-  try {
-    const body: unknown = await response.json();
-    if (isRecord(body) && typeof body["title"] === "string") {
-      const hint = typeof body["hint"] === "string" ? body["hint"] : "";
-      return hint === "" ? body["title"] : `${body["title"]} — ${hint}`;
-    }
-  } catch {
-    // not JSON: fall through to the status line
-  }
-  return `transcription failed: HTTP ${response.status}`;
-}
 
 /** Which model and language the backend defaults to. */
 export async function transcriptionInfo(): Promise<TranscriptionInfo> {

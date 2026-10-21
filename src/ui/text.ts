@@ -33,3 +33,18 @@ export function formatBytes(bytes: number): string {
 export function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+/**
+ * `62`, `1:02` or `1:02.5` → seconds; empty → `null` (no limit), malformed → `NaN`.
+ * The time inputs accept what people type for timecodes, not just numbers.
+ */
+export function parseTimestamp(value: string): number | null {
+  const text = value.trim();
+  if (text === "") return null;
+
+  const parts = text.split(":");
+  if (parts.length > 2) return Number.NaN;
+  const numbers = parts.map((part) => Number(part.replace(",", ".")));
+  if (numbers.some((number) => !Number.isFinite(number) || number < 0)) return Number.NaN;
+  return numbers.reduce((total, number) => total * 60 + number, 0);
+}

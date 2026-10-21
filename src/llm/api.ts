@@ -1,21 +1,5 @@
 import type { LlmChatRequest, LlmModelInfo, LlmProviderInfo } from "../../shared/llm.ts";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-async function errorMessage(response: Response): Promise<string> {
-  try {
-    const body: unknown = await response.json();
-    if (isRecord(body) && typeof body["title"] === "string") {
-      const hint = typeof body["hint"] === "string" ? body["hint"] : "";
-      return hint === "" ? body["title"] : `${body["title"]} — ${hint}`;
-    }
-  } catch {
-    // not JSON: fall through to the status line
-  }
-  return `request failed: HTTP ${response.status}`;
-}
+import { errorMessage, isRecord } from "../net/http.ts";
 
 export async function listProviders(): Promise<LlmProviderInfo[]> {
   const response = await fetch("/api/llm/providers");

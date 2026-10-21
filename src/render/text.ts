@@ -1,6 +1,6 @@
 /** Canvas text helpers: the renderer measures every line itself. */
 
-export const FONT_STACK = 'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
+export const FONT_STACK = '"Google Sans", Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
 
 export function setFont(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,

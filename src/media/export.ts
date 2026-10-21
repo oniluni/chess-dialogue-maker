@@ -108,6 +108,9 @@ export async function exportMp4(request: ExportRequest): Promise<Blob> {
   if (!(total > 0)) throw new Error("the export is empty");
 
   const { scene, options } = request;
+  // Card text is drawn with a webfont: never encode a frame before it is available.
+  await document.fonts.ready;
+
   const canvas = new OffscreenCanvas(scene.width, scene.height);
   const context = canvas.getContext("2d");
   if (context === null) throw new Error("the browser did not provide a 2D context for export");

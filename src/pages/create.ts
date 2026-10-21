@@ -25,6 +25,8 @@ import { createAnalysisPanel } from "./analysis-panel.ts";
 import { createAudioPanel } from "./audio-panel.ts";
 import { createExportRow } from "./export-row.ts";
 import type { Page } from "./page.ts";
+import { createUrlPanel } from "./url-panel.ts";
+import type { Trim } from "./url-panel.ts";
 
 const PLAY_LABEL = "▶";
 const PAUSE_LABEL = "❚❚";
@@ -127,12 +129,20 @@ export function renderCreatePage(): Page {
     attrs: { type: "button" },
   });
 
+  const urlPanel = createUrlPanel((file, trim) => {
+    void openFile(file, trim);
+  });
+
   const element = el("section", {
     class: "page",
     children: [
       el("h1", { class: "page-title", text: "Create video" }),
-      el("p", { class: "page-hint", text: "A local file: pick one or drop it into the window." }),
+      el("p", {
+        class: "page-hint",
+        text: "A local file or a link: open it here, then trim, analyse and render.",
+      }),
       dropZone,
+      urlPanel.element,
       fileInput,
       status,
       meta,
@@ -214,10 +224,15 @@ export function renderCreatePage(): Page {
     setStatus(next.file.name);
   }
 
-  async function openFile(file: File): Promise<void> {
+  async function openFile(file: File, trim: Trim | null = null): Promise<void> {
     setStatus(`Opening ${file.name}…`);
     try {
-      showClip(await openClip(file));
+      const opened = await openClip(file);
+      if (trim !== null) {
+        const duration = opened.media.info.duration;
+        setClipRange({ start: trim.start, end: Math.min(trim.end ?? duration, duration) });
+      }
+      showClip(opened);
     } catch (error) {
       setStatus(messageOf(error));
     }
@@ -396,6 +411,10 @@ export function renderCreatePage(): Page {
 
   startPreviewLoop();
   if (clip !== null) showClip(clip);
+  // The webfont may arrive after the first frame; redraw once it is ready.
+  void document.fonts.ready.then(() => {
+    drawPreview();
+  });
 
   return {
     element,
@@ -405,6 +424,7 @@ export function renderCreatePage(): Page {
       soundBoard.dispose();
       analysis.dispose();
       exportRow.dispose();
+      urlPanel.dispose();
       video.pause();
       video.removeAttribute("src");
       video.load();

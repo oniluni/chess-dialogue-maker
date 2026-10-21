@@ -1,8 +1,11 @@
+﻿import { createReadStream } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { ErrorResponse, HealthResponse } from "../shared/api.ts";
 import type { LlmChatMessage, LlmChatRequest, LlmErrorBody } from "../shared/llm.ts";
 import type { TranscriptionResponse } from "../shared/transcribe.ts";
+import { fileOf, removeJob, startDownload, statusOf } from "./download.ts";
+import type { DownloadRequest } from "./download.ts";
 import { chat, LlmError, models, providers } from "./llm.ts";
 import { defaultLanguage, modelName, transcribe } from "./transcribe.ts";
 
@@ -107,6 +110,45 @@ function chatRequest(value: unknown): LlmChatRequest {
   };
 }
 
+function secondsField(value: unknown, field: string): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new BadRequest(`"${field}" must be a number of seconds`);
+  }
+  return value;
+}
+
+function downloadRequest(value: unknown): DownloadRequest {
+  if (!isRecord(value)) throw new BadRequest("The request body must be a JSON object");
+  const raw = value["url"];
+  if (typeof raw !== "string" || raw.trim() === "") throw new BadRequest('"url" is required');
+
+  const url = raw.trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new BadRequest("Paste a link that starts with http:// or https://");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new BadRequest("Paste a link that starts with http:// or https://");
+  }
+
+  const start = secondsField(value["start"], "start");
+  const end = secondsField(value["end"], "end");
+  if (start !== null && end !== null && end <= start) {
+    throw new BadRequest("The end of the fragment must be after its start");
+  }
+  return { url, start, end };
+}
+
+function mediaType(name: string): string {
+  if (name.endsWith(".mp4") || name.endsWith(".m4v")) return "video/mp4";
+  if (name.endsWith(".webm")) return "video/webm";
+  if (name.endsWith(".mkv")) return "video/x-matroska";
+  if (name.endsWith(".mov")) return "video/quicktime";
+  return "application/octet-stream";
+}
 function fail(response: ServerResponse, error: unknown): void {
   if (error instanceof BadRequest) {
     const body: LlmErrorBody = { error: "llm_error", title: error.title, hint: error.hint };
@@ -118,7 +160,7 @@ function fail(response: ServerResponse, error: unknown): void {
     sendJson(response, 502, body);
     return;
   }
-  // Anything else — a missing model file, a crashed pipeline — still has to reach the UI.
+  // Anything else â€” a missing model file, a crashed pipeline â€” still has to reach the UI.
   console.error("request failed:", error);
   const hint = error instanceof Error ? error.message : String(error);
   const body: LlmErrorBody = { error: "llm_error", title: "The request failed", hint };
@@ -199,8 +241,53 @@ export async function handleApi(
     return;
   }
 
+  if (url.pathname === "/api/download") {
+    if (method !== "POST") return methodNotAllowed(response);
+    try {
+      const payload = downloadRequest(await readJsonBody(request));
+      sendJson(response, 201, { id: startDownload(payload) });
+    } catch (error) {
+      fail(response, error);
+    }
+    return;
+  }
+
+  const downloadPath = /^\/api\/download\/([0-9a-f-]{36})(\/file)?$/.exec(url.pathname);
+  if (downloadPath !== null) {
+    const id = downloadPath[1] ?? "";
+    if (downloadPath[2] !== undefined) {
+      if (method !== "GET") return methodNotAllowed(response);
+      const file = fileOf(id);
+      if (file === null) {
+        sendJson(response, 404, { error: "not_found" } satisfies ErrorResponse);
+        return;
+      }
+      response.writeHead(200, {
+        "content-type": mediaType(file.name),
+        "content-length": file.size,
+        "cache-control": "no-store",
+        "content-disposition": `inline; filename="${file.name}"`,
+      });
+      createReadStream(file.path).pipe(response);
+      return;
+    }
+    if (method === "DELETE") {
+      removeJob(id);
+      sendJson(response, 200, { ok: true });
+      return;
+    }
+    if (method !== "GET") return methodNotAllowed(response);
+    const status = statusOf(id);
+    if (status === null) {
+      sendJson(response, 404, { error: "not_found" } satisfies ErrorResponse);
+      return;
+    }
+    sendJson(response, 200, status);
+    return;
+  }
   if (url.pathname.startsWith("/api/")) {
     sendJson(response, 404, { error: "not_found" } satisfies ErrorResponse);
     return;
   }
 }
+
