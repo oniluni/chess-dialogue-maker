@@ -1,4 +1,4 @@
-﻿import { createReadStream } from "node:fs";
+﻿import { createReadStream, existsSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { ErrorResponse, HealthResponse } from "../shared/api.ts";
@@ -14,6 +14,9 @@ import { diarize } from "./speakers.ts";
 import { analyzeFrames } from "./vision.ts";
 import { SAMPLE_RATE, decodeWav } from "./wav.ts";
 import { detectProsody } from "./prosody.ts";
+import { cookiesFile, saveCookies } from "./download-cache.ts";
+import { updateYtdlp, ytdlpVersion } from "./download.ts";
+import { search } from "./search.ts";
 import { deleteProject, listProjects, loadProject, saveProject } from "./projects.ts";
 import { classify, SOUND_MODEL } from "./yamnet.ts";
 import { defaultLanguage, modelName, transcribe } from "./transcribe.ts";
@@ -332,6 +335,51 @@ export async function handleApi(
     return;
   }
 
+
+  if (url.pathname === "/api/search") {
+    if (method !== "GET") return methodNotAllowed(response);
+    try {
+      const query = url.searchParams.get("q") ?? "";
+      sendJson(response, 200, { hits: await search(query) });
+    } catch (error) {
+      fail(response, error);
+    }
+    return;
+  }
+
+  if (url.pathname === "/api/download/info") {
+    if (method !== "GET") return methodNotAllowed(response);
+    try {
+      sendJson(response, 200, { version: await ytdlpVersion(), cookies: existsSync(cookiesFile()) });
+    } catch (error) {
+      fail(response, error);
+    }
+    return;
+  }
+
+  if (url.pathname === "/api/download/cookies") {
+    if (method !== "POST") return methodNotAllowed(response);
+    try {
+      const body = await readJsonBody(request);
+      if (!isRecord(body) || typeof body["text"] !== "string") throw new BadRequest('"text" must hold the cookies');
+      await saveCookies(body["text"]);
+      sendJson(response, 200, { saved: true });
+    } catch (error) {
+      fail(response, error);
+    }
+    return;
+  }
+
+  if (url.pathname === "/api/download/update") {
+    if (method !== "POST") return methodNotAllowed(response);
+    try {
+      sendJson(response, 200, { output: await updateYtdlp() });
+    } catch (error) {
+      fail(response, error);
+    }
+    return;
+  }
+
   if (url.pathname === "/api/projects") {
     try {
       if (method === "GET") {
@@ -460,6 +508,7 @@ export async function handleApi(
     return;
   }
 }
+
 
 
 

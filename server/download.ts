@@ -1,10 +1,12 @@
 ﻿import { spawn, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { DownloadStatus } from "../shared/download.ts";
 import { SECTION_MARGIN } from "../shared/download.ts";
+import { cacheHit, cookiesFile, readCache, writeCache } from "./download-cache.ts";
 
 export interface DownloadRequest {
   url: string;
@@ -94,6 +96,8 @@ function sectionArgs(request: DownloadRequest): { from: number; to: number | nul
 }
 
 function cookiesArgs(): string[] {
+  const saved = cookiesFile();
+  if (existsSync(saved)) return ["--cookies", saved];
   const browser = process.env["YTDLP_COOKIES_FROM_BROWSER"]?.trim();
   const file = process.env["YTDLP_COOKIES"]?.trim();
   if (file) return ["--cookies", file];
@@ -202,19 +206,33 @@ async function runJob(job: Job, request: DownloadRequest): Promise<void> {
     if (section !== null) args.push(...section.args);
     args.push(request.url);
 
-    job.message = "Starting the downloadâ€¦";
-    const result = await spawnYtdlp(bin, args, (line) => {
+    job.message = "Starting the download…";
+    const onLine = (line: string): void => {
       output += `${line}\n`;
       const percent = parsePercent(line);
       if (percent !== null) {
         job.progress = percent;
         job.message = `Downloading ${Math.round(percent * 100)}%`;
       } else if (/\[Merger\]/.test(line)) {
-        job.message = "Merging the audio and the videoâ€¦";
+        job.message = "Merging the audio and the video…";
       }
-    });
+    };
+    const result = await spawnYtdlp(bin, args, onLine);
 
-    if (result.code !== 0) {
+    let code = result.code;
+    if (code !== 0 && section !== null) {
+      // YouTube sometimes refuses a fragment but serves the whole video.
+      job.message = "The fragment is unavailable; downloading the whole video…";
+      job.progress = 0;
+      const retry = args.filter((arg) => !section.args.includes(arg));
+      const again = await spawnYtdlp(bin, retry, onLine);
+      code = again.code;
+      if (code !== 0) {
+        job.state = "error";
+        job.message = classify(again.output);
+        return;
+      }
+    } else if (code !== 0) {
       job.state = "error";
       job.message = classify(result.output);
       return;
@@ -230,6 +248,16 @@ async function runJob(job: Job, request: DownloadRequest): Promise<void> {
     const info = await stat(join(job.dir, name));
     job.name = name;
     job.file = { name, size: info.size };
+    const entries = await readCache(CACHE_DIR);
+    entries.push({
+      url: request.url,
+      start: request.start,
+      end: request.end,
+      dir: job.dir,
+      name,
+      size: info.size,
+    });
+    await writeCache(CACHE_DIR, entries);
     job.progress = 1;
     job.state = "done";
     job.message = "Ready";
@@ -272,12 +300,23 @@ export function startDownload(request: DownloadRequest): string {
     name: null,
     state: "running",
     progress: 0,
-    message: "Preparingâ€¦",
+    message: "Preparing…",
     file: null,
   };
   jobs.set(id, job);
   void mkdir(dir, { recursive: true })
-    .then(() => runJob(job, { url, start: request.start, end: request.end }))
+    .then(async () => {
+      const hit = cacheHit(await readCache(CACHE_DIR), url, request.start, request.end);
+      if (hit !== null) {
+        job.name = hit.name;
+        job.file = { name: hit.name, size: hit.size };
+        job.progress = 1;
+        job.state = "done";
+        job.message = "Ready (already downloaded)";
+        return;
+      }
+      await runJob(job, { url, start: request.start, end: request.end });
+    })
     .catch((error: unknown) => {
       job.state = "error";
       job.message = error instanceof Error ? error.message : String(error);
@@ -305,4 +344,18 @@ export function removeJob(id: string): void {
   void rm(job.dir, { recursive: true, force: true });
 }
 
+
+
+export async function ytdlpVersion(): Promise<string> {
+  const bin = await resolveYtdlp();
+  const result = await spawnYtdlp(bin, ["--version"], () => undefined);
+  return result.output.trim().split(/\r?\n/)[0] ?? "";
+}
+
+export async function updateYtdlp(): Promise<string> {
+  const bin = await resolveYtdlp();
+  const result = await spawnYtdlp(bin, ["-U"], () => undefined);
+  if (result.code !== 0) throw new Error(classify(result.output));
+  return result.output.trim();
+}
 

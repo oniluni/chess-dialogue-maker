@@ -1,4 +1,4 @@
-import { buildSchedule } from "../analysis/schedule.ts";
+﻿import { buildSchedule } from "../analysis/schedule.ts";
 import type { Schedule } from "../analysis/schedule.ts";
 import { SoundBoard } from "../audio/player.ts";
 import { exportMp4 } from "../media/export.ts";
@@ -32,10 +32,11 @@ import { createProjectsPanel } from "./projects-panel.ts";
 import { createSummaryPanel } from "./summary-panel.ts";
 import { PreviewPlayer } from "./preview-player.ts";
 import { createUrlPanel } from "./url-panel.ts";
+import { createSearchPanel } from "./search-panel.ts";
 import type { Trim } from "./url-panel.ts";
 
-const PLAY_LABEL = "â–¶";
-const PAUSE_LABEL = "âšâš";
+const PLAY_LABEL = "Ã¢â€“Â¶";
+const PAUSE_LABEL = "Ã¢ÂÅ¡Ã¢ÂÅ¡";
 
 export function renderCreatePage(): Page {
   let clip: Clip | null = getClip();
@@ -116,9 +117,9 @@ export function renderCreatePage(): Page {
     class: "select",
     attrs: { "aria-label": "Output format" },
     children: [
-      el("option", { text: "Vertical Â· crop to fill", attrs: { value: "vertical" } }),
-      el("option", { text: "Original Â· whole frame", attrs: { value: "original" } }),
-      el("option", { text: "Landscape Â· wide canvas", attrs: { value: "landscape" } }),
+      el("option", { text: "Vertical Ã‚Â· crop to fill", attrs: { value: "vertical" } }),
+      el("option", { text: "Original Ã‚Â· whole frame", attrs: { value: "original" } }),
+      el("option", { text: "Landscape Ã‚Â· wide canvas", attrs: { value: "landscape" } }),
     ],
   });
   formatSelect.value = getScheduleOptions().format;
@@ -176,6 +177,9 @@ export function renderCreatePage(): Page {
   const urlPanel = createUrlPanel((file, trim) => {
     void openFile(file, trim);
   });
+  const searchPanel = createSearchPanel((url) => {
+    urlPanel.setUrl(url);
+  });
 
   const element = el("section", {
     class: "page",
@@ -187,6 +191,7 @@ export function renderCreatePage(): Page {
       }),
       dropZone,
       urlPanel.element,
+      searchPanel,
       fileInput,
       status,
       meta,
@@ -213,8 +218,8 @@ export function renderCreatePage(): Page {
     if (clip === null) return;
     const { start, end } = clip.range;
     const schedule = scheduleFor(clip);
-    const extra = schedule.duration > end - start + 0.01 ? ` Â· output ${formatTimestamp(schedule.duration)}` : "";
-    selection.textContent = `Selection ${formatTimestamp(start)} â€“ ${formatTimestamp(end)} Â· ${(end - start).toFixed(1)} s${extra}`;
+    const extra = schedule.duration > end - start + 0.01 ? ` Ã‚Â· output ${formatTimestamp(schedule.duration)}` : "";
+    selection.textContent = `Selection ${formatTimestamp(start)} Ã¢â‚¬â€œ ${formatTimestamp(end)} Ã‚Â· ${(end - start).toFixed(1)} s${extra}`;
     timeline?.setRange({ start, end });
   }
 
@@ -233,11 +238,11 @@ export function renderCreatePage(): Page {
     const info = next.media.info;
     video.src = next.objectUrl;
     meta.textContent = [
-      `${info.width}Ã—${info.height}`,
+      `${info.width}Ãƒâ€”${info.height}`,
       formatClock(info.duration),
       formatBytes(next.file.size),
       info.hasAudio ? "with audio" : "without audio",
-    ].join(" Â· ");
+    ].join(" Ã‚Â· ");
     playerRow.hidden = false;
     exportRow.element.hidden = false;
     exportRow.hideDownload();
@@ -267,7 +272,7 @@ export function renderCreatePage(): Page {
 
   async function openFile(file: File, trim: Trim | null = null): Promise<void> {
     clearAvatars();
-    setStatus(`Opening ${file.name}â€¦`);
+    setStatus(`Opening ${file.name}Ã¢â‚¬Â¦`);
     try {
       const opened = await openClip(file);
       if (trim !== null) {
@@ -285,7 +290,7 @@ export function renderCreatePage(): Page {
     exportRow.setBusy(true);
     exportRow.hideDownload();
     exportRow.setProgress(0);
-    setStatus("Rendering MP4â€¦");
+    setStatus("Rendering MP4Ã¢â‚¬Â¦");
     try {
       const blob = await exportMp4({
         video: clip.media.video,
@@ -368,4 +373,5 @@ export function renderCreatePage(): Page {
     },
   };
 }
+
 

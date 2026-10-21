@@ -11,6 +11,8 @@ export interface Trim {
 
 export interface UrlPanel {
   element: HTMLElement;
+  /** Puts a link found by the search panel into the field. */
+  setUrl(url: string): void;
   dispose(): void;
 }
 
@@ -36,7 +38,7 @@ export function createUrlPanel(onFile: (file: File, trim: Trim | null) => void):
 
   const urlInput = el("input", {
     class: "text-input",
-    attrs: { type: "url", placeholder: "https://www.youtube.com/watch?v=…", "aria-label": "Video link" },
+    attrs: { type: "url", placeholder: "https://www.youtube.com/watch?v=â€¦", "aria-label": "Video link" },
   });
   const fromInput = el("input", {
     class: "text-input time-input",
@@ -130,7 +132,7 @@ export function createUrlPanel(onFile: (file: File, trim: Trim | null) => void):
 
     setBusy(true);
     progress.value = 0;
-    show("Starting the download…");
+    show("Starting the downloadâ€¦");
     try {
       const id = await startDownload(url, from, to);
       jobId = id;
@@ -167,6 +169,9 @@ export function createUrlPanel(onFile: (file: File, trim: Trim | null) => void):
 
   return {
     element,
+    setUrl(url: string) {
+      urlInput.value = url;
+    },
     dispose() {
       disposed = true;
       if (jobId !== null) void forgetDownload(jobId).catch((error: unknown) => console.warn("could not drop the download:", error));
@@ -174,3 +179,4 @@ export function createUrlPanel(onFile: (file: File, trim: Trim | null) => void):
     },
   };
 }
+
