@@ -10,20 +10,21 @@ import {
 } from "mediabunny";
 import type { InputAudioTrack, InputVideoTrack } from "mediabunny";
 
+import type { Move } from "../analysis/move.ts";
+import { activeMoveIndex } from "../analysis/move.ts";
 import { FRAME_RATE } from "../analysis/schedule.ts";
-import type { Schedule } from "../analysis/schedule.ts";
+import type { Schedule, ScheduleOptions } from "../analysis/schedule.ts";
+import type { Scene } from "../render/scene.ts";
+import { pauseState, playState } from "../render/state.ts";
 
 export interface ExportRequest {
   video: InputVideoTrack;
   audio: InputAudioTrack | null;
-  width: number;
-  height: number;
   schedule: Schedule;
+  scene: Scene;
+  moves: Move[];
+  options: ScheduleOptions;
   onProgress?: (fraction: number) => void;
-}
-
-function evenDimension(value: number): number {
-  return Math.max(2, Math.round(value / 2) * 2);
 }
 
 /** The kept part of a decoded audio chunk, as its own buffer. */
@@ -54,21 +55,20 @@ function silentBuffer(seconds: number, channels: number, sampleRate: number): Au
 }
 
 /**
- * Renders the schedule into an MP4: every play segment is decoded and re-encoded frame by
- * frame, every pause holds one frame for its duration, and the audio gets silence there.
- * The single canvas is also where the move card will be drawn.
+ * Renders the schedule into an MP4: play segments are decoded frame by frame, pauses hold
+ * one frame while the card is typed, and the audio gets silence there. Every frame goes
+ * through the same `Scene` the preview uses, so the preview is the render.
  */
 export async function exportMp4(request: ExportRequest): Promise<Blob> {
-  const width = evenDimension(request.width);
-  const height = evenDimension(request.height);
   const total = request.schedule.duration;
   if (!(total > 0)) throw new Error("the export is empty");
 
-  const canvas = new OffscreenCanvas(width, height);
+  const { scene } = request;
+  const canvas = new OffscreenCanvas(scene.width, scene.height);
   const context = canvas.getContext("2d");
   if (context === null) throw new Error("the browser did not provide a 2D context for export");
 
-  const frames = new CanvasSink(request.video, { width, height, fit: "fill", poolSize: 2 });
+  const frames = new CanvasSink(request.video, { poolSize: 2 });
   const target = new BufferTarget();
   const output = new Output({ format: new Mp4OutputFormat(), target });
   const videoSource = new CanvasSource(canvas, { codec: "avc", quality: QUALITY_MEDIUM });
@@ -87,7 +87,7 @@ export async function exportMp4(request: ExportRequest): Promise<Blob> {
           const from = Math.max(frame.timestamp, segment.start);
           const to = Math.min(frame.timestamp + frame.duration, segment.end);
           if (to <= from) continue;
-          context.drawImage(frame.canvas, 0, 0, width, height);
+          scene.draw(context, frame.canvas, playState(request.moves, from));
           await videoSource.add(outTime, to - from);
           outTime += to - from;
           request.onProgress?.(Math.min(0.95, outTime / total));
@@ -96,9 +96,12 @@ export async function exportMp4(request: ExportRequest): Promise<Blob> {
       }
 
       const still = await frames.getCanvas(segment.at);
+      const pausedIndex = Math.max(0, activeMoveIndex(request.moves, segment.at));
       const count = Math.max(1, Math.round(segment.duration * FRAME_RATE));
       for (let index = 0; index < count; index += 1) {
-        if (still !== null) context.drawImage(still.canvas, 0, 0, width, height);
+        if (still !== null) {
+          scene.draw(context, still.canvas, pauseState(request.moves, pausedIndex, index / FRAME_RATE, request.options));
+        }
         await videoSource.add(outTime, 1 / FRAME_RATE);
         outTime += 1 / FRAME_RATE;
         request.onProgress?.(Math.min(0.95, outTime / total));

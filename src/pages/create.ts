@@ -1,12 +1,17 @@
+import { activeMoveIndex } from "../analysis/move.ts";
 import { buildSchedule } from "../analysis/schedule.ts";
 import type { PauseSegment, Schedule } from "../analysis/schedule.ts";
 import { exportMp4 } from "../media/export.ts";
+import { createScene } from "../render/scene.ts";
+import { pauseState, playState } from "../render/state.ts";
 import {
   getClip,
   getMoves,
+  getNames,
   getScheduleOptions,
   openClip,
   setClipRange,
+  setNames,
   setScheduleOptions,
 } from "../session.ts";
 import type { Clip } from "../session.ts";
@@ -29,10 +34,13 @@ export function renderCreatePage(): Page {
   let clip: Clip | null = getClip();
   let timeline: Timeline | null = null;
   let downloadUrl: string | null = null;
+  let scene = createScene(getMoves(), getNames());
   let pauseQueue: QueuedPause[] = [];
   let pauseTimer: number | null = null;
   let frameLoop: number | null = null;
   let holding = false;
+  let holdStartedAt = 0;
+  let holdIndex = -1;
 
   const fileInput = el("input", {
     class: "visually-hidden",
@@ -41,7 +49,29 @@ export function renderCreatePage(): Page {
   const status = el("p", { class: "status-line", text: "No file selected." });
   const meta = el("p", { class: "meta" });
 
-  const video = el("video", { class: "stage-video", attrs: { playsinline: "", preload: "auto" } });
+  const video = el("video", { class: "visually-hidden", attrs: { playsinline: "", preload: "auto" } });
+  const canvas = el("canvas", {
+    class: "stage",
+    attrs: { width: String(scene.width), height: String(scene.height) },
+  });
+  const context = canvas.getContext("2d");
+
+  const whiteName = el("input", {
+    class: "name-input",
+    attrs: { type: "text", value: getNames().white, "aria-label": "White player" },
+  });
+  const blackName = el("input", {
+    class: "name-input",
+    attrs: { type: "text", value: getNames().black, "aria-label": "Black player" },
+  });
+  const names = el("div", {
+    class: "names",
+    children: [
+      el("label", { class: "name-field", children: [el("span", { text: "White" }), whiteName] }),
+      el("label", { class: "name-field", children: [el("span", { text: "Black" }), blackName] }),
+    ],
+  });
+
   const playButton = el("button", {
     class: "button",
     text: PLAY_LABEL,
@@ -59,6 +89,7 @@ export function renderCreatePage(): Page {
   const player = el("div", {
     class: "player",
     children: [
+      canvas,
       video,
       el("div", { class: "transport", children: [playButton, clock] }),
       pauseOption,
@@ -94,6 +125,7 @@ export function renderCreatePage(): Page {
       fileInput,
       status,
       meta,
+      names,
       player,
       exportRow,
     ],
@@ -120,6 +152,23 @@ export function renderCreatePage(): Page {
     timeline?.setRange({ start, end });
   }
 
+  function drawPreview(): void {
+    if (clip === null || context === null || video.readyState < 2) return;
+    const options = getScheduleOptions();
+    const state =
+      holding && holdIndex >= 0
+        ? pauseState(getMoves(), holdIndex, (performance.now() - holdStartedAt) / 1000, options)
+        : playState(getMoves(), video.currentTime);
+    scene.draw(context, video, state);
+  }
+
+  function rebuildScene(): void {
+    scene = createScene(getMoves(), getNames());
+    canvas.width = scene.width;
+    canvas.height = scene.height;
+    drawPreview();
+  }
+
   function showClip(next: Clip): void {
     clip = next;
     const info = next.media.info;
@@ -144,6 +193,7 @@ export function renderCreatePage(): Page {
         if (video.currentTime < range.start || video.currentTime > range.end) {
           video.currentTime = range.start;
         }
+        drawPreview();
       },
       onSeek: (time) => {
         video.currentTime = time;
@@ -174,9 +224,10 @@ export function renderCreatePage(): Page {
       const blob = await exportMp4({
         video: clip.media.video,
         audio: clip.media.audio,
-        width: clip.media.info.width,
-        height: clip.media.info.height,
         schedule: scheduleFor(clip),
+        scene,
+        moves: getMoves(),
+        options: getScheduleOptions(),
         onProgress: (fraction) => {
           progress.value = fraction;
         },
@@ -207,33 +258,48 @@ export function renderCreatePage(): Page {
 
   function cancelHold(): void {
     holding = false;
+    holdIndex = -1;
     if (pauseTimer !== null) {
       clearTimeout(pauseTimer);
       pauseTimer = null;
     }
   }
 
-  function startFrameLoop(): void {
+  function enterHold(next: QueuedPause): void {
+    next.done = true;
+    holding = true;
+    holdIndex = Math.max(0, activeMoveIndex(getMoves(), next.at));
+    holdStartedAt = performance.now();
+    video.pause();
+    video.currentTime = next.at;
+    pauseTimer = window.setTimeout(() => {
+      pauseTimer = null;
+      holding = false;
+      holdIndex = -1;
+      if (!video.ended) void video.play();
+    }, next.duration * 1000);
+  }
+
+  function startPreviewLoop(): void {
     if (frameLoop !== null) return;
     const step = (): void => {
       frameLoop = requestAnimationFrame(step);
-      if (video.paused || holding) return;
+      if (holding) {
+        drawPreview();
+        return;
+      }
+      if (video.paused) return;
       const next = pauseQueue.find((pause) => !pause.done && video.currentTime >= pause.at);
-      if (next === undefined) return;
-      next.done = true;
-      holding = true;
-      video.pause();
-      video.currentTime = next.at;
-      pauseTimer = window.setTimeout(() => {
-        pauseTimer = null;
-        holding = false;
-        if (!video.ended) void video.play();
-      }, next.duration * 1000);
+      if (next !== undefined) {
+        enterHold(next);
+        return;
+      }
+      drawPreview();
     };
     frameLoop = requestAnimationFrame(step);
   }
 
-  function stopFrameLoop(): void {
+  function stopPreviewLoop(): void {
     if (frameLoop !== null) cancelAnimationFrame(frameLoop);
     frameLoop = null;
   }
@@ -272,21 +338,29 @@ export function renderCreatePage(): Page {
     setScheduleOptions({ pauseOnMove: pauseToggle.checked });
     updateSelection();
   });
+  whiteName.addEventListener("input", () => {
+    setNames({ white: whiteName.value });
+    rebuildScene();
+  });
+  blackName.addEventListener("input", () => {
+    setNames({ black: blackName.value });
+    rebuildScene();
+  });
 
   video.addEventListener("loadedmetadata", () => {
     if (clip !== null) video.currentTime = clip.range.start;
   });
+  video.addEventListener("loadeddata", drawPreview);
   video.addEventListener("play", () => {
     playButton.textContent = PAUSE_LABEL;
     rebuildQueue();
-    startFrameLoop();
   });
   video.addEventListener("pause", () => {
     playButton.textContent = PLAY_LABEL;
-    stopFrameLoop();
     if (!holding) cancelHold();
   });
   video.addEventListener("seeked", () => {
+    drawPreview();
     if (!video.paused) rebuildQueue();
   });
   video.addEventListener("timeupdate", () => {
@@ -303,13 +377,13 @@ export function renderCreatePage(): Page {
     void runExport();
   });
 
+  startPreviewLoop();
   if (clip !== null) showClip(clip);
 
   return {
     element,
     dispose() {
-      // The session keeps the blob URL and the tracks: only this page's video goes away.
-      stopFrameLoop();
+      stopPreviewLoop();
       cancelHold();
       video.pause();
       video.removeAttribute("src");

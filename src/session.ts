@@ -5,6 +5,8 @@ import { openMedia } from "./media/probe.ts";
 import type { OpenedMedia } from "./media/probe.ts";
 import { clampRange } from "./media/range.ts";
 import type { TimeRange } from "./media/range.ts";
+import { DEFAULT_NAMES } from "./names.ts";
+import type { Names } from "./names.ts";
 
 export interface Clip {
   file: File;
@@ -17,6 +19,7 @@ export interface Clip {
 let clip: Clip | null = null;
 let moves: Move[] = [];
 let scheduleOptions: ScheduleOptions = { ...DEFAULT_SCHEDULE_OPTIONS };
+let names: Names = { ...DEFAULT_NAMES };
 
 export function getScheduleOptions(): ScheduleOptions {
   return scheduleOptions;
@@ -24,6 +27,14 @@ export function getScheduleOptions(): ScheduleOptions {
 
 export function setScheduleOptions(patch: Partial<ScheduleOptions>): void {
   scheduleOptions = { ...scheduleOptions, ...patch };
+}
+
+export function getNames(): Names {
+  return names;
+}
+
+export function setNames(patch: Partial<Names>): void {
+  names = { ...names, ...patch };
 }
 
 export function getClip(): Clip | null {

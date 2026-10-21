@@ -1,8 +1,8 @@
-import { MOVE_GLYPHS, movesToJson, parseMoves, SIDE_LABELS } from "../analysis/move.ts";
+import { formatEval, MOVE_GLYPHS, movesToJson, parseMoves, SIDE_LABELS } from "../analysis/move.ts";
 import type { Move } from "../analysis/move.ts";
 import { getClip, getMoves, setMoves } from "../session.ts";
 import { el } from "../ui/dom.ts";
-import { formatEval, formatTimestamp, messageOf } from "../ui/text.ts";
+import { formatTimestamp, messageOf } from "../ui/text.ts";
 import type { Page } from "./page.ts";
 
 export function renderMovesPage(): Page {

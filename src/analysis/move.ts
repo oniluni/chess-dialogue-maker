@@ -17,6 +17,34 @@ export const MOVE_GLYPHS: Record<MoveType, string> = {
 
 export const SIDE_LABELS: Record<Side, string> = { white: "White", black: "Black" };
 
+/** The chess.com palette the old renderer used for cards and the move badge. */
+export const MOVE_COLORS: Record<MoveType, string> = {
+  Brilliant: "#1baca6",
+  Great: "#5c8bb0",
+  Best: "#96bc4b",
+  Inaccuracy: "#f0c15c",
+  Mistake: "#e6912c",
+  Blunder: "#ca3431",
+};
+
+/** `+1.2`, `-0.5`, `0.0` — the eval bar label. */
+export function formatEval(score: number): string {
+  const rounded = Math.round(score * 10) / 10;
+  if (rounded === 0) return "0.0";
+  return rounded > 0 ? `+${rounded.toFixed(1)}` : rounded.toFixed(1);
+}
+
+/** Index of the move that owns `time`, or -1 before the first one. */
+export function activeMoveIndex(moves: Move[], time: number): number {
+  let index = -1;
+  for (let position = 0; position < moves.length; position += 1) {
+    const move = moves[position];
+    if (move === undefined || move.start > time) break;
+    index = position;
+  }
+  return index;
+}
+
 export interface Move {
   start: number;
   end: number;

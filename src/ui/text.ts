@@ -19,13 +19,6 @@ export function formatClock(seconds: number): string {
   return hours > 0 ? `${hours}:${tail}` : `${minutes}:${String(rest).padStart(2, "0")}`;
 }
 
-/** `+1.2`, `-0.5`, `0.0` — the eval label. */
-export function formatEval(score: number): string {
-  const rounded = Math.round(score * 10) / 10;
-  if (rounded === 0) return "0.0";
-  return rounded > 0 ? `+${rounded.toFixed(1)}` : rounded.toFixed(1);
-}
-
 const SIZE_UNITS = ["B", "KB", "MB", "GB"] as const;
 
 export function formatBytes(bytes: number): string {
