@@ -1,13 +1,24 @@
+import { removeMove, swapMoves, upsertMoves } from "../analysis/move-draft.ts";
 import { formatEval, MOVE_GLYPHS, movesToJson, parseMoves, SIDE_LABELS } from "../analysis/move.ts";
 import type { Move } from "../analysis/move.ts";
-import { getClip, getMoves, setMoves } from "../session.ts";
+import {
+  getClip,
+  getMoves,
+  getMovesBackup,
+  getNames,
+  restoreMovesBackup,
+  setMoves,
+} from "../session.ts";
 import { el } from "../ui/dom.ts";
 import { formatTimestamp, messageOf } from "../ui/text.ts";
+import { createMoveEditor } from "./move-editor.ts";
+import type { MoveEditor } from "./move-editor.ts";
 import type { Page } from "./page.ts";
 
 export function renderMovesPage(): Page {
   const clip = getClip();
   let exportUrl: string | null = null;
+  let selected: number | null = null;
 
   const fileInput = el("input", {
     class: "visually-hidden",
@@ -15,10 +26,46 @@ export function renderMovesPage(): Page {
   });
   const importButton = el("button", { class: "button", text: "Import JSON", attrs: { type: "button" } });
   const exportLink = el("a", { class: "button", text: "Export JSON", attrs: { download: "moves.json" } });
+  const restoreButton = el("button", { class: "button", text: "Restore analysis", attrs: { type: "button" } });
   const count = el("span", { class: "meta" });
   const status = el("p", { class: "status-line" });
   const list = el("ol", { class: "move-list" });
   const empty = el("p", { class: "placeholder" });
+
+  const video =
+    clip === null
+      ? null
+      : el("video", {
+          class: "move-video",
+          attrs: { src: clip.objectUrl, controls: "", playsinline: "" },
+        });
+
+  const editor: MoveEditor = createMoveEditor({
+    moves: getMoves,
+    names: getNames,
+    duration: () => (clip === null ? null : clip.media.info.duration),
+    playhead: () => (video === null ? 0 : video.currentTime),
+    onSaved: (move, index) => {
+      const result = upsertMoves(getMoves(), index, move, clip === null ? null : clip.media.info.duration);
+      setMoves(result.moves);
+      renderList();
+      select(result.index);
+      setStatus(index === null ? "Move added." : "Move saved.");
+    },
+    onDeleted: (index) => {
+      setMoves(removeMove(getMoves(), index, clip === null ? null : clip.media.info.duration));
+      renderList();
+      select(null);
+      setStatus("Move deleted.");
+    },
+    onSwapped: (index, step) => {
+      const result = swapMoves(getMoves(), index, step, clip === null ? null : clip.media.info.duration);
+      setMoves(result.moves);
+      renderList();
+      select(result.index);
+      setStatus("Move moved on the timeline.");
+    },
+  });
 
   const element = el("section", {
     class: "page",
@@ -26,13 +73,14 @@ export function renderMovesPage(): Page {
       el("h1", { class: "page-title", text: "Moves" }),
       el("p", {
         class: "page-hint",
-        text: "The move cards of the review: import a moves.json file or export the list.",
+        text: "Edit the cards of the review: pick a move, change its text and times, or add one at the playhead.",
       }),
-      el("div", { class: "toolbar", children: [importButton, exportLink, count] }),
+      el("div", { class: "toolbar", children: [importButton, exportLink, restoreButton, count] }),
       fileInput,
       status,
+      video,
       empty,
-      list,
+      el("div", { class: "moves-layout", children: [list, editor.element] }),
     ],
   });
 
@@ -41,8 +89,9 @@ export function renderMovesPage(): Page {
   }
 
   function row(move: Move, index: number): HTMLElement {
-    return el("li", {
-      class: "move-row",
+    const button = el("button", {
+      class: `move-row${index === selected ? " is-selected" : ""}`,
+      attrs: { type: "button" },
       children: [
         el("span", { class: "move-index", text: String(index + 1) }),
         el("span", {
@@ -55,6 +104,10 @@ export function renderMovesPage(): Page {
         el("span", { class: "move-eval", text: formatEval(move.evalScore) }),
       ],
     });
+    button.addEventListener("click", () => {
+      select(index);
+    });
+    return el("li", { children: [button] });
   }
 
   function refreshExport(): void {
@@ -75,10 +128,29 @@ export function renderMovesPage(): Page {
     const moves = getMoves();
     list.replaceChildren(...moves.map((move, index) => row(move, index)));
     list.hidden = moves.length === 0;
-    empty.hidden = moves.length > 0;
+    empty.hidden = moves.length > 0 || clip === null;
+    if (clip !== null && moves.length === 0) {
+      empty.textContent = "No moves yet: add one at the playhead or import moves.json.";
+    }
     exportLink.hidden = moves.length === 0;
     count.textContent = moves.length === 1 ? "1 move" : `${moves.length} moves`;
+    restoreButton.disabled = getMovesBackup() === null;
     refreshExport();
+  }
+
+  function select(index: number | null): void {
+    const move = index === null ? undefined : getMoves()[index];
+    if (index === null || move === undefined) {
+      selected = null;
+      editor.clear();
+    } else {
+      selected = index;
+      editor.show(move, index);
+      if (video !== null) video.currentTime = move.start;
+    }
+    [...list.querySelectorAll(".move-row")].forEach((item, rowIndex) => {
+      item.classList.toggle("is-selected", rowIndex === selected);
+    });
   }
 
   async function importFile(file: File): Promise<void> {
@@ -88,8 +160,9 @@ export function renderMovesPage(): Page {
     }
     try {
       const parsed = parseMoves(await file.text(), clip.media.info.duration);
-      setMoves(parsed);
+      setMoves(parsed, { keepBackup: true });
       renderList();
+      select(null);
       const amount = parsed.length === 1 ? "1 move" : `${parsed.length} moves`;
       setStatus(`Imported ${amount} from ${file.name}`);
     } catch (error) {
@@ -102,20 +175,34 @@ export function renderMovesPage(): Page {
     const file = fileInput.files?.[0];
     if (file !== undefined) void importFile(file);
   });
+  restoreButton.addEventListener("click", () => {
+    if (!restoreMovesBackup()) {
+      setStatus("There is no saved analysis to restore.");
+      return;
+    }
+    renderList();
+    select(null);
+    setStatus("The original analysis is back.");
+  });
 
   if (clip === null) {
     importButton.disabled = true;
     empty.textContent = "Open a clip on the Create video page first.";
-  } else if (getMoves().length === 0) {
-    empty.textContent = "No moves yet. Import a moves.json file.";
+    editor.element.hidden = true;
   }
   renderList();
 
   return {
     element,
     dispose() {
+      editor.dispose();
       if (exportUrl !== null) URL.revokeObjectURL(exportUrl);
       exportUrl = null;
+      if (video !== null) {
+        video.pause();
+        video.removeAttribute("src");
+        video.load();
+      }
     },
   };
 }

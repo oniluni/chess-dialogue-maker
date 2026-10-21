@@ -24,6 +24,7 @@ export interface LlmChoice {
 
 let clip: Clip | null = null;
 let moves: Move[] = [];
+let movesBackup: Move[] | null = null;
 let transcript: TranscriptSegment[] = [];
 let scheduleOptions: ScheduleOptions = { ...DEFAULT_SCHEDULE_OPTIONS };
 let names: Names = { ...DEFAULT_NAMES };
@@ -69,8 +70,20 @@ export function getMoves(): Move[] {
   return moves;
 }
 
-export function setMoves(next: Move[]): void {
+export function setMoves(next: Move[], options: { keepBackup?: boolean } = {}): void {
   moves = next;
+  if (options.keepBackup === true) movesBackup = next.map((move) => ({ ...move }));
+}
+
+/** The analysis as it was before the first hand edit; `null` until a list arrives. */
+export function getMovesBackup(): Move[] | null {
+  return movesBackup === null ? null : movesBackup.map((move) => ({ ...move }));
+}
+
+export function restoreMovesBackup(): boolean {
+  if (movesBackup === null) return false;
+  moves = movesBackup.map((move) => ({ ...move }));
+  return true;
 }
 
 /** Opens a file as the current clip, releasing the previous one only after the new one loads. */
@@ -98,5 +111,6 @@ export function closeClip(): void {
   clip.media.input.dispose();
   clip = null;
   moves = [];
+  movesBackup = null;
   transcript = [];
 }

@@ -244,7 +244,7 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
         onAttempt: (attempt, total) => setStatus(`Asking the model (attempt ${attempt} of ${total})…`),
       });
       if (disposed) return;
-      setMoves(moves);
+      setMoves(moves, { keepBackup: true });
       options.onMoves(moves);
       setStatus(`${moves.length === 1 ? "1 move" : `${moves.length} moves`} on the timeline`);
     } catch (error) {
