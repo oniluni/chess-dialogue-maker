@@ -71,6 +71,7 @@ export function resolveRecovery(
   segments: TranscriptSegment[],
   names: Names,
   duration: number | null,
+  edits: Array<{ title: string; explanation: string } | null> = [],
 ): Move[] {
   const moves = plan.steps.flatMap((step, index) => {
     const choice = choices[index] ?? { attempt: plan.baseAttempt, position: step.index };
@@ -80,10 +81,16 @@ export function resolveRecovery(
       ) ?? step.alternatives[0];
     if (picked === undefined) return [];
 
+    const edit = edits[index];
     const built: MoveCandidate = {
       ...picked.candidate,
       firstSegment: step.firstSegment,
       lastSegment: step.lastSegment,
+      title: edit !== null && edit !== undefined && edit.title.trim() !== "" ? edit.title.trim() : picked.candidate.title,
+      explanation:
+        edit !== null && edit !== undefined && edit.explanation.trim() !== ""
+          ? edit.explanation.trim()
+          : picked.candidate.explanation,
     };
     return [moveFromCandidate(built, segments, names)];
   });

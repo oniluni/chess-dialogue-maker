@@ -1,16 +1,20 @@
-import { formatEval, MOVE_COLORS, MOVE_GLYPHS } from "../analysis/move.ts";
+﻿import { formatEval } from "../analysis/move.ts";
 import type { Move } from "../analysis/move.ts";
 import type { Names } from "../names.ts";
 import type { FrameFaces } from "../../shared/people.ts";
 import type { SceneAvatars } from "./avatar.ts";
+import { getSoundEvents, soundKindLabel } from "../analysis/sound-events.ts";
+import { HEIGHT, setCanvasSize, WIDTH } from "./canvas.ts";
+import { bodyChars, introSpec, specFor } from "./card-spec.ts";
+import type { CardSpec, CardText } from "./card-spec.ts";
+import { fittedSize, initials } from "./player-text.ts";
+import { drawVideo } from "./video.ts";
 import { getStyle } from "./style.ts";
 import type { TranscriptSegment } from "../analysis/transcript.ts";
 import { getScheduleOptions } from "../session.ts";
 import type { FrameState } from "./state.ts";
 import { ellipsize, setFont, wrapLines } from "./text.ts";
 
-export let WIDTH = 1080;
-export let HEIGHT = 1920;
 
 const TOP_MARGIN = 120;
 const CARD_MIN_H = 170;
@@ -54,51 +58,6 @@ export interface Scene {
     state: FrameState,
     time: number,
   ): void;
-}
-
-interface CardSpec {
-  title: string;
-  subtitle: string;
-  body: string;
-  color: string;
-  glyph: string | null;
-}
-
-interface CardText {
-  title: string[];
-  subtitle: string;
-  body: string[];
-  titleSize: number;
-  subtitleSize: number;
-  bodySize: number;
-  titleLine: number;
-  subtitleLine: number;
-  bodyLine: number;
-  bodyChars: number;
-}
-
-function specFor(move: Move): CardSpec {
-  return {
-    title: move.title,
-    subtitle: move.moveNumber,
-    body: move.explanation,
-    color: MOVE_COLORS[move.moveType],
-    glyph: MOVE_GLYPHS[move.moveType],
-  };
-}
-
-function introSpec(names: Names): CardSpec {
-  return {
-    title: `${names.white} — ${names.black}`,
-    subtitle: "The game begins",
-    body: "",
-    color: MUTED,
-    glyph: null,
-  };
-}
-
-function bodyChars(body: string[]): number {
-  return body.reduce((total, line) => total + line.length, 0) + Math.max(0, body.length - 1);
 }
 
 function measureCard(
@@ -171,83 +130,9 @@ function fitCardHeight(
   return Math.max(CARD_MIN_H, Math.min(CARD_MAX_H, tallest));
 }
 
-function sourceSize(source: CanvasImageSource): { width: number; height: number } {
-  if (source instanceof HTMLVideoElement) return { width: source.videoWidth, height: source.videoHeight };
-  if (source instanceof HTMLCanvasElement || source instanceof OffscreenCanvas || source instanceof ImageBitmap) {
-    return { width: source.width, height: source.height };
-  }
-  return { width: WIDTH, height: HEIGHT };
-}
 
-function drawVideo(
-  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
-  source: CanvasImageSource,
-  uiHeight: number,
-  time: number,
-  frames: FrameFaces[] | null,
-): void {
-  const boxHeight = HEIGHT - uiHeight;
-  const size = sourceSize(source);
-  if (size.width <= 0 || size.height <= 0) return;
-
-  if (getScheduleOptions().format === "original") {
-    const scale = Math.min(WIDTH / size.width, boxHeight / size.height);
-    const width = size.width * scale;
-    const height = size.height * scale;
-    ctx.drawImage(source, (WIDTH - width) / 2, uiHeight + (boxHeight - height) / 2, width, height);
-    return;
-  }
-
-  const crop = cropRect(frames, time, size.width, size.height, boxHeight);
-  if (crop !== null) {
-    ctx.drawImage(source, crop.x, crop.y, crop.w, crop.h, 0, uiHeight, WIDTH, boxHeight);
-    return;
-  }
-
-  const scale = Math.max(WIDTH / size.width, boxHeight / size.height);
-  const width = size.width * scale;
-  const height = size.height * scale;
-  ctx.drawImage(source, (WIDTH - width) / 2, uiHeight + (boxHeight - height) / 2, width, height);
-}
 
 /** The crop that keeps the faces in view, in source pixels; `null` means a plain centre crop. */
-function cropRect(
-  frames: FrameFaces[] | null,
-  time: number,
-  sourceWidth: number,
-  sourceHeight: number,
-  boxHeight: number,
-): { x: number; y: number; w: number; h: number } | null {
-  if (frames === null || frames.length === 0) return null;
-
-  let nearest: FrameFaces | undefined;
-  let distance = Number.POSITIVE_INFINITY;
-  for (const frame of frames) {
-    const next = Math.abs(frame.time - time);
-    if (next < distance) {
-      distance = next;
-      nearest = frame;
-    }
-  }
-  if (nearest === undefined || nearest.boxes.length === 0) return null;
-
-  let cx = 0;
-  let cy = 0;
-  for (const box of nearest.boxes) {
-    cx += box.x + box.width / 2;
-    cy += box.y + box.height / 2;
-  }
-  cx /= nearest.boxes.length;
-  cy /= nearest.boxes.length;
-
-  const aspect = WIDTH / boxHeight;
-  const sourceAspect = sourceWidth / sourceHeight;
-  const w = sourceAspect > aspect ? sourceHeight * aspect : sourceWidth;
-  const h = sourceAspect > aspect ? sourceHeight : sourceWidth / aspect;
-  const x = Math.max(0, Math.min(sourceWidth - w, cx * sourceWidth - w / 2));
-  const y = Math.max(0, Math.min(sourceHeight - h, cy * sourceHeight - h / 2));
-  return { x, y, w, h };
-}
 
 function drawIcon(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
@@ -325,26 +210,7 @@ function drawCard(
   ctx.restore();
 }
 
-function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter((part) => part !== "");
-  const first = parts[0]?.slice(0, 1) ?? "?";
-  const second = parts.length > 1 ? (parts[1]?.slice(0, 1) ?? "") : "";
-  return `${first}${second}`.toUpperCase();
-}
 
-function fittedSize(
-  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
-  text: string,
-  weight: 400 | 600 | 700,
-  size: number,
-  maxWidth: number,
-): number {
-  for (let current = size; current > 14; current -= 2) {
-    setFont(ctx, weight, current);
-    if (ctx.measureText(text).width <= maxWidth) return current;
-  }
-  return 14;
-}
 
 function drawPlayer(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
@@ -435,9 +301,7 @@ export function createScene(
   frames: FrameFaces[] | null = null,
   subtitles: TranscriptSegment[] | null = null,
 ): Scene {
-  const format = getScheduleOptions().format;
-  WIDTH = format === "landscape" ? 1920 : 1080;
-  HEIGHT = format === "landscape" ? 1080 : 1920;
+  setCanvasSize(getScheduleOptions().format);
 
   const measure = new OffscreenCanvas(1, 1).getContext("2d");
   if (measure === null) throw new Error("the browser did not provide a 2D context for the card");
@@ -450,6 +314,44 @@ export function createScene(
   const playersTop = TOP_MARGIN + cardHeight;
   const evalTop = playersTop + PLAYERS_H + EVAL_GAP;
   const uiHeight = evalTop + EVAL_H;
+
+  function drawSoundTag(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    time: number,
+  ): void {
+    const events = getSoundEvents();
+    let current: (typeof events)[number] | undefined;
+    let distance = Number.POSITIVE_INFINITY;
+    for (const event of events) {
+      const next = Math.abs(event.at - time);
+      if (next <= 1.2 && next < distance) {
+        distance = next;
+        current = event;
+      }
+    }
+    if (current === undefined) return;
+
+    const label = (current.label.trim() === "" ? soundKindLabel(current.kind) : current.label).toUpperCase();
+    ctx.save();
+    setFont(ctx, 700, 26);
+    const padding = 22;
+    const width = ctx.measureText(label).width + padding * 2;
+    const height = 52;
+    const x = 40;
+    const y = uiHeight + 40;
+
+    ctx.globalAlpha = 0.82;
+    ctx.fillStyle = "#14120f";
+    ctx.beginPath();
+    ctx.roundRect(x, y, width, height, height / 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "#ffd166";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, x + width / 2, y + height / 2 + 1);
+    ctx.restore();
+  }
 
   function drawSubtitle(
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
@@ -499,6 +401,7 @@ export function createScene(
       ctx.fillStyle = getStyle().pageBg;
       ctx.fillRect(0, 0, WIDTH, HEIGHT);
       drawVideo(ctx, source, uiHeight, time, frames);
+      drawSoundTag(ctx, time);
       drawSubtitle(ctx, time);
 
       const current = cards[state.moveIndex];
@@ -533,3 +436,4 @@ export function createScene(
     },
   };
 }
+

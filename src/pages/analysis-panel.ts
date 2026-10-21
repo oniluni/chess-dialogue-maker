@@ -1,7 +1,6 @@
-import type { LlmModelInfo, LlmProviderInfo } from "../../shared/llm.ts";
-import { analyzeDialogue } from "../analysis/analyze.ts";
-import type { Move, Side } from "../analysis/move.ts";
-import { detectSpeakers } from "../analysis/speakers.ts";
+﻿import type { LlmModelInfo, LlmProviderInfo } from "../../shared/llm.ts";
+import { analyzeDialogue, extraAttempt } from "../analysis/analyze.ts";
+import type { Move } from "../analysis/move.ts";
 import { transcribeWav, transcriptionInfo } from "../analysis/transcribe.ts";
 import { parseTranscript } from "../analysis/transcript.ts";
 import { listModels, listProviders } from "../llm/api.ts";
@@ -11,17 +10,16 @@ import {
   getLlmChoice,
   getNames,
   getRecovery,
-  getSpeakerHints,
   getTranscript,
   setLlmChoice,
   setMoves,
   setRecovery,
-  setSpeakerHints,
   setTranscript,
 } from "../session.ts";
 import { el } from "../ui/dom.ts";
 import { formatTimestamp, messageOf } from "../ui/text.ts";
 import { createRecoveryPanel } from "./recovery-panel.ts";
+import { createSpeakersPanel } from "./speakers-panel.ts";
 
 const LANGUAGES = [
   { id: "ru", label: "Russian" },
@@ -72,25 +70,7 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
   const status = el("p", { class: "status-line" });
   const recoveryHost = el("div", { class: "recovery-host" });
 
-  const speakersButton = el("button", { class: "button", text: "Detect speakers", attrs: { type: "button" } });
-  const speakersInfo = el("span", { class: "meta" });
-  const sideA = el("select", { class: "select", attrs: { "aria-label": "Voice A side" } });
-  const sideB = el("select", { class: "select", attrs: { "aria-label": "Voice B side" } });
-  for (const select of [sideA, sideB]) {
-    select.append(el("option", { text: "White", attrs: { value: "white" } }));
-    select.append(el("option", { text: "Black", attrs: { value: "black" } }));
-  }
-  sideA.value = "white";
-  sideB.value = "black";
-  const speakersRow = el("div", {
-    class: "toolbar",
-    children: [
-      speakersButton,
-      el("label", { class: "field", children: [el("span", { text: "Voice A" }), sideA] }),
-      el("label", { class: "field", children: [el("span", { text: "Voice B" }), sideB] }),
-      speakersInfo,
-    ],
-  });
+  const speakers = createSpeakersPanel({ onStatus: setStatus });
 
   const element = el("section", {
     class: "analysis",
@@ -114,7 +94,7 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
         ],
       }),
       fileInput,
-      speakersRow,
+      speakers.element,
       status,
       recoveryHost,
     ],
@@ -136,90 +116,19 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
     } else {
       const last = segments[segments.length - 1];
       const end = last === undefined ? 0 : last.end;
-      transcriptInfo.textContent = `${segments.length} lines · up to ${formatTimestamp(end)}`;
+      transcriptInfo.textContent = `${segments.length} lines Â· up to ${formatTimestamp(end)}`;
     }
     analyzeButton.disabled =
       clip === null || segments.length === 0 || providerSelect.value === "" || modelSelect.value === "";
     transcribeButton.disabled = clip === null;
-    refreshSpeakers();
-  }
-
-  function refreshSpeakers(): void {
-    const hints = getSpeakerHints();
-    const clip = getClip();
-    const segments = getTranscript();
-    speakersButton.disabled = clip === null || segments.length === 0;
-    sideA.disabled = hints === null;
-    sideB.disabled = hints === null;
-
-    if (hints === null) {
-      speakersInfo.textContent = segments.length === 0 ? "" : "no voice hints yet";
-      return;
-    }
-
-    sideA.value = hints.sides.A;
-    sideB.value = hints.sides.B;
-    let countA = 0;
-    let countB = 0;
-    let unsure = 0;
-    for (const hint of hints.hints) {
-      if (hint.label === "A" && hint.confidence >= 0.8) countA += 1;
-      else if (hint.label === "B" && hint.confidence >= 0.8) countB += 1;
-      else unsure += 1;
-    }
-    speakersInfo.textContent = `A: ${countA} · B: ${countB} · unsure: ${unsure} · confidence ${hints.reliability.toFixed(2)}`;
-  }
-
-  function setSides(changed: "A" | "B"): void {
-    const hints = getSpeakerHints();
-    if (hints === null) return;
-    const chosen: Side = (changed === "A" ? sideA.value : sideB.value) === "black" ? "black" : "white";
-    const other: Side = chosen === "white" ? "black" : "white";
-    setSpeakerHints({
-      ...hints,
-      sides: changed === "A" ? { A: chosen, B: other } : { A: other, B: chosen },
-    });
-    refreshSpeakers();
-  }
-
-  async function detect(): Promise<void> {
-    const clip = getClip();
-    const segments = getTranscript();
-    if (clip === null || segments.length === 0) return;
-
-    speakersButton.disabled = true;
-    setStatus("Comparing the voices…");
-    try {
-      const wav = await extractWav(clip.file);
-      const result = await detectSpeakers(
-        wav,
-        segments.map((segment) => ({ start: segment.start, end: segment.end })),
-      );
-      if (disposed) return;
-      if (result.hints.length !== segments.length) throw new Error("the answer does not match the transcript");
-
-      const previous = getSpeakerHints();
-      setSpeakerHints({
-        hints: result.hints,
-        sides: previous === null ? { A: "white", B: "black" } : previous.sides,
-        reliability: result.reliability,
-      });
-      setStatus(`Voices compared: ${result.reliability.toFixed(2)} reliability.`);
-    } catch (error) {
-      if (!disposed) setStatus(messageOf(error));
-    } finally {
-      if (!disposed) {
-        refreshSpeakers();
-        refresh();
-      }
-    }
+    speakers.refresh();
   }
 
   function fillProviders(): void {
     providerSelect.replaceChildren(
       ...providers.map((provider) =>
         el("option", {
-          text: provider.needsKey && !provider.configured ? `${provider.label} · no key` : provider.label,
+          text: provider.needsKey && !provider.configured ? `${provider.label} Â· no key` : provider.label,
           attrs: { value: provider.id },
         }),
       ),
@@ -295,11 +204,11 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
     if (clip === null) return;
 
     transcribeButton.disabled = true;
-    setStatus("Extracting the audio…");
+    setStatus("Extracting the audioâ€¦");
     try {
       const wav = await extractWav(clip.file);
       if (disposed) return;
-      setStatus("Transcribing… the first run downloads the model.");
+      setStatus("Transcribingâ€¦ the first run downloads the model.");
       const segments = await transcribeWav(wav, languageSelect.value);
       if (disposed) return;
       setTranscript(segments);
@@ -334,18 +243,17 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
     if (clip === null || segments.length === 0 || choice.provider === "") return;
 
     analyzeButton.disabled = true;
-    setStatus("Asking the model…");
+    setStatus("Asking the modelâ€¦");
     const duration = clip.media.info.duration;
     try {
-      const speakers = getSpeakerHints();
       const result = await analyzeDialogue({
         segments,
         names: getNames(),
         provider: choice.provider,
         model: choice.model,
         duration,
-        speakers: speakers === null ? null : { hints: speakers.hints, sides: speakers.sides },
-        onAttempt: (attempt, total) => setStatus(`Asking the model (attempt ${attempt} of ${total})…`),
+        speakers: speakers.context(),
+        onAttempt: (attempt, total) => setStatus(`Asking the model (attempt ${attempt} of ${total})â€¦`),
       });
       if (disposed) return;
 
@@ -356,7 +264,7 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
         options.onMoves(result.moves);
         setStatus(
           `${result.moves.length === 1 ? "1 move" : `${result.moves.length} moves`} on the timeline` +
-            (result.attempts.length > 1 ? ` · attempt ${result.attempts.length}` : ""),
+            (result.attempts.length > 1 ? ` Â· attempt ${result.attempts.length}` : ""),
         );
       } else {
         setRecovery({ attempts: result.attempts, segments, duration });
@@ -378,13 +286,48 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
     segments: Parameters<typeof createRecoveryPanel>[1],
     duration: number | null,
   ): void {
-    const panel = createRecoveryPanel(attempts, segments, duration, (moves) => {
-      setMoves(moves, { keepBackup: true });
-      setRecovery(null);
-      recoveryHost.replaceChildren();
-      options.onMoves(moves);
-      setStatus(`${moves.length === 1 ? "1 move" : `${moves.length} moves`} recovered — check them on the Moves page.`);
-    });
+    const panel = createRecoveryPanel(
+      attempts,
+      segments,
+      duration,
+      (moves) => {
+        setMoves(moves, { keepBackup: true });
+        setRecovery(null);
+        recoveryHost.replaceChildren();
+        options.onMoves(moves);
+        setStatus(
+          `${moves.length === 1 ? "1 move" : `${moves.length} moves`} recovered â€” check them on the Moves page.`,
+        );
+      },
+      () => {
+        void (async (): Promise<void> => {
+          const choice = getLlmChoice();
+          const last = attempts[attempts.length - 1];
+          if (last === undefined || choice.provider === "") return;
+          setStatus("Asking for one more answerâ€¦");
+          try {
+            const extra = await extraAttempt(
+              {
+                segments,
+                names: getNames(),
+                provider: choice.provider,
+                model: choice.model,
+                duration,
+                speakers: speakers.context(),
+              },
+              last,
+            );
+            if (disposed) return;
+            const next = [...attempts, extra];
+            setRecovery({ attempts: next, segments, duration });
+            showRecovery(next, segments, duration);
+            setStatus("One more answer is in the list.");
+          } catch (error) {
+            if (!disposed) setStatus(messageOf(error));
+          }
+        })();
+      },
+    );
     recoveryHost.replaceChildren(
       panel ?? el("p", { class: "status-line", text: "No answer had a usable list of moves." }),
     );
@@ -409,15 +352,6 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
   analyzeButton.addEventListener("click", () => {
     void analyze();
   });
-  speakersButton.addEventListener("click", () => {
-    void detect();
-  });
-  sideA.addEventListener("change", () => {
-    setSides("A");
-  });
-  sideB.addEventListener("change", () => {
-    setSides("B");
-  });
 
   void loadProviders();
   void loadTranscriptionInfo();
@@ -436,3 +370,4 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
     },
   };
 }
+

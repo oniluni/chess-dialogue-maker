@@ -1,36 +1,14 @@
+import {
+  addSoundEvent,
+  getSoundEvents,
+  removeSoundEvent,
+  SOUND_KINDS,
+  soundKindLabel,
+} from "../analysis/sound-events.ts";
+import type { SoundKind } from "../analysis/sound-events.ts";
 import { el } from "../ui/dom.ts";
 import { formatTimestamp, parseTimestamp } from "../ui/text.ts";
 import type { Page } from "./page.ts";
-
-export type SoundKind = "laugh" | "applause" | "music" | "shout" | "silence" | "other";
-
-export const SOUND_KINDS: Array<{ id: SoundKind; label: string }> = [
-  { id: "laugh", label: "Laughter" },
-  { id: "applause", label: "Applause" },
-  { id: "music", label: "Music" },
-  { id: "shout", label: "Shout" },
-  { id: "silence", label: "Silence" },
-  { id: "other", label: "Other" },
-];
-
-export interface SoundEvent {
-  id: number;
-  at: number;
-  kind: SoundKind;
-  label: string;
-}
-
-let events: SoundEvent[] = [];
-let nextId = 1;
-
-export function getSoundEvents(): SoundEvent[] {
-  return events;
-}
-
-export function setSoundEvents(next: SoundEvent[]): void {
-  events = next;
-  nextId = Math.max(0, ...next.map((event) => event.id)) + 1;
-}
 
 /** Manual sound tags: what happens when, to be shown as tags over the video later. */
 export function renderSoundsPage(): Page {
@@ -57,7 +35,7 @@ export function renderSoundsPage(): Page {
       el("h1", { class: "page-title", text: "Sounds" }),
       el("p", {
         class: "page-hint",
-        text: "Sound tags of the clip: laughter, applause, music, a shout. Automatic detection comes next; for now they are added by hand.",
+        text: "Sound tags of the clip: laughter, applause, music, a shout. Automatic detection comes next; for now they are added by hand and drawn over the video.",
       }),
       el("div", { class: "toolbar", children: [timeInput, kindSelect, labelInput, addButton] }),
       status,
@@ -67,12 +45,12 @@ export function renderSoundsPage(): Page {
   });
 
   function render(): void {
+    const events = getSoundEvents();
     list.replaceChildren(
       ...events.map((event) => {
-        const kind = SOUND_KINDS.find((item) => item.id === event.kind)?.label ?? event.kind;
         const remove = el("button", { class: "button button-small", text: "✕", attrs: { type: "button" } });
         remove.addEventListener("click", () => {
-          events = events.filter((item) => item.id !== event.id);
+          removeSoundEvent(event.id);
           render();
           setStatus("Event removed.");
         });
@@ -80,7 +58,7 @@ export function renderSoundsPage(): Page {
           class: "move-row",
           children: [
             el("span", { class: "move-time", text: formatTimestamp(event.at) }),
-            el("span", { class: "move-side", text: kind }),
+            el("span", { class: "move-side", text: soundKindLabel(event.kind) }),
             el("span", { class: "move-title", text: event.label }),
             remove,
           ],
@@ -105,12 +83,7 @@ export function renderSoundsPage(): Page {
       setStatus(`"${timeInput.value}" is not a time.`);
       return;
     }
-    events = [
-      ...events,
-      { id: nextId, at, kind: kindSelect.value as SoundKind, label: labelInput.value.trim() },
-    ];
-    nextId += 1;
-    events.sort((left, right) => left.at - right.at);
+    addSoundEvent({ at, kind: kindSelect.value as SoundKind, label: labelInput.value.trim() });
     timeInput.value = "";
     labelInput.value = "";
     render();

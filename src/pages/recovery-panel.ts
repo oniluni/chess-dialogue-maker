@@ -13,18 +13,21 @@ function previewOf(candidate: { title: string; explanation: string } | undefined
 
 /**
  * The recovery window: the base answer sets the step boundaries, every answer offers its
- * overlapping move as a variant, and the person picks one per step.
+ * overlapping move as a variant, the text can be corrected in place and more answers can be asked
+ * for.
  */
 export function createRecoveryPanel(
   attempts: AnalysisAttempt[],
   segments: TranscriptSegment[],
   duration: number | null,
   onResolved: (moves: Move[]) => void,
+  onMore?: () => void,
 ): HTMLElement | null {
   const plan = planRecovery(attempts);
   if (plan === null) return null;
 
   const choices: Array<RecoveryChoice | null> = plan.steps.map(() => null);
+  const edits: Array<{ title: string; explanation: string } | null> = plan.steps.map(() => null);
 
   const rows = plan.steps.map((step, index) => {
     const first = segments[step.firstSegment];
@@ -50,13 +53,36 @@ export function createRecoveryPanel(
     choices[index] = { attempt: plan.baseAttempt, position: step.index };
 
     const preview = el("p", { class: "recovery-preview", text: previewOf(step.alternatives[0]?.candidate) });
+
+    const title = el("input", {
+      class: "text-input",
+      attrs: { type: "text", placeholder: "title", "aria-label": `Title of step ${index + 1}` },
+    });
+    const explanation = el("textarea", {
+      class: "text-input",
+      attrs: { rows: "2", placeholder: "explanation", "aria-label": `Explanation of step ${index + 1}` },
+    });
+    const base = step.alternatives[0]?.candidate;
+    title.value = base?.title ?? "";
+    explanation.value = base?.explanation ?? "";
+    const saveEdit = (): void => {
+      edits[index] = { title: title.value, explanation: explanation.value };
+    };
+    title.addEventListener("input", saveEdit);
+    explanation.addEventListener("input", saveEdit);
+    saveEdit();
+
     select.addEventListener("change", () => {
       const [attempt, position] = select.value.split(":").map(Number);
-      const alternative = step.alternatives.find(
-        (item) => item.attempt === attempt && item.position === position,
-      );
-      choices[index] = alternative === undefined ? null : { attempt: alternative.attempt, position: alternative.position };
+      const alternative = step.alternatives.find((item) => item.attempt === attempt && item.position === position);
+      choices[index] =
+        alternative === undefined ? null : { attempt: alternative.attempt, position: alternative.position };
       preview.textContent = previewOf(alternative?.candidate);
+      if (alternative !== undefined) {
+        title.value = alternative.candidate.title;
+        explanation.value = alternative.candidate.explanation;
+        saveEdit();
+      }
     });
 
     return el("div", {
@@ -71,6 +97,7 @@ export function createRecoveryPanel(
           ],
         }),
         preview,
+        el("div", { class: "recovery-edit", children: [title, explanation] }),
       ],
     });
   });
@@ -89,11 +116,21 @@ export function createRecoveryPanel(
     attrs: { type: "button" },
   });
   applyButton.addEventListener("click", () => {
-    const moves = resolveRecovery(plan, choices, segments, getNames(), duration);
+    const moves = resolveRecovery(plan, choices, segments, getNames(), duration, edits);
     if (moves.length === 0) return;
     applyButton.disabled = true;
     onResolved(moves);
   });
+
+  const buttons = [applyButton];
+  if (onMore !== undefined) {
+    const moreButton = el("button", { class: "button", text: "One more answer", attrs: { type: "button" } });
+    moreButton.addEventListener("click", () => {
+      moreButton.disabled = true;
+      onMore();
+    });
+    buttons.push(moreButton);
+  }
 
   return el("div", {
     class: "recovery",
@@ -101,11 +138,11 @@ export function createRecoveryPanel(
       el("h3", { class: "section-title", text: "Recovery: pick a variant for each step" }),
       el("p", {
         class: "page-hint",
-        text: "None of the answers passed the checks. The step times come from the answer with the fewest problems; the text is yours to choose. Edit it later on the Moves page.",
+        text: "None of the answers passed the checks. The step times come from the answer with the fewest problems; the text can be fixed right here or later on the Moves page.",
       }),
       ...rows,
       issues,
-      el("div", { class: "toolbar", children: [applyButton] }),
+      el("div", { class: "toolbar", children: buttons }),
     ],
   });
 }

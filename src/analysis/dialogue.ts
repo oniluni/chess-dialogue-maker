@@ -10,6 +10,10 @@ export interface DialogueLine {
   end: number;
   text: string;
   speaker: Side | null;
+  /** âˆ’3â€¦+3, how strong the line was for its speaker; drives the automatic move type. */
+  strength: number | null;
+  /** A short motif of the line, used as the gist when the moment has none. */
+  motif: string;
 }
 
 /** A moment groups consecutive lines into one card. */
@@ -40,7 +44,7 @@ export interface DialogueBuild {
 
 function gistOf(moveNumber: string): string {
   const text = moveNumber.replace(/^\s*\d+[.)]?\s*/, "").trim();
-  const marker = text.indexOf(" · ");
+  const marker = text.indexOf(" Â· ");
   return marker < 0 ? "" : text.slice(marker + 3).trim();
 }
 
@@ -51,6 +55,8 @@ export function fromTranscript(segments: TranscriptSegment[]): Dialogue {
       end: segment.end,
       text: segment.text,
       speaker: null,
+      strength: null,
+      motif: "",
     })),
     moments: [],
   };
@@ -58,7 +64,7 @@ export function fromTranscript(segments: TranscriptSegment[]): Dialogue {
 
 export function fromMoves(moves: Move[]): Dialogue {
   return {
-    lines: moves.map((move) => ({ start: move.start, end: move.end, text: "", speaker: move.speaker })),
+    lines: moves.map((move) => ({ start: move.start, end: move.end, text: "", speaker: move.speaker, strength: null, motif: "" })),
     moments: moves.map((move, index) => ({
       from: index,
       to: index,
@@ -112,6 +118,24 @@ function majority(sides: Side[]): Side | null {
   return white > black ? "white" : "black";
 }
 
+/** −3…+3 strength to the verdict, as the old manual editor did. */
+export function typeForStrength(strength: number | null): MoveType {
+  if (strength === null) return "Best";
+  if (strength >= 2.5) return "Brilliant";
+  if (strength >= 1.5) return "Great";
+  if (strength >= 0.5) return "Best";
+  if (strength <= -2.5) return "Blunder";
+  if (strength <= -1.5) return "Mistake";
+  if (strength <= -0.5) return "Inaccuracy";
+  return "Best";
+}
+
+/** The card subtitle: the moment's gist, else the first motif among its lines. */
+function moveNumberOf(name: string, gist: string, lines: DialogueLine[]): string {
+  const clean = gist.trim() !== "" ? gist.trim() : (lines.find((line) => line.motif.trim() !== "")?.motif.trim() ?? "");
+  return clean === "" ? name : `${name} · ${clean}`;
+}
+
 /** Turns the lines and moments into moves; no model is involved. */
 export function buildDialogue(dialogue: Dialogue, names: Names, duration: number | null): DialogueBuild {
   const errors: string[] = [];
@@ -136,7 +160,7 @@ export function buildDialogue(dialogue: Dialogue, names: Names, duration: number
 
     const speaker = moment.speaker ?? majority(lines.map((line) => line.speaker).filter((side): side is Side => side !== null));
     if (speaker === null) {
-      errors.push(`Moment ${number}: nobody speaks in its lines — pick a side.`);
+      errors.push(`Moment ${number}: nobody speaks in its lines â€” pick a side.`);
       continue;
     }
 
@@ -145,7 +169,9 @@ export function buildDialogue(dialogue: Dialogue, names: Names, duration: number
     const explanation = moment.explanation.replace(/\s+/g, " ").trim();
     if (explanation === "") errors.push(`Moment ${number}: the explanation is empty.`);
 
-    const moveType: MoveType = moment.moveType ?? "Best";
+    const strengths = lines.map((line) => line.strength).filter((value): value is number => value !== null);
+    const average = strengths.length === 0 ? null : strengths.reduce((sum, value) => sum + value, 0) / strengths.length;
+    const moveType: MoveType = moment.moveType ?? typeForStrength(average);
     const sign = speaker === "white" ? 1 : -1;
     const evalScore =
       moment.evalScore ?? Math.max(-10, Math.min(10, Math.round((previousEval + sign * EVAL_SWING[moveType]) * 10) / 10));
@@ -155,7 +181,7 @@ export function buildDialogue(dialogue: Dialogue, names: Names, duration: number
       start: first.start,
       end: last.end,
       speaker,
-      moveNumber: names[speaker] + (moment.gist.trim() === "" ? "" : ` · ${moment.gist.trim()}`),
+      moveNumber: moveNumberOf(names[speaker], moment.gist, lines),
       moveType,
       title,
       explanation,
@@ -178,3 +204,4 @@ export function buildDialogue(dialogue: Dialogue, names: Names, duration: number
   }
   return { moves: sanitizeMoves(moves, duration), errors, warnings };
 }
+

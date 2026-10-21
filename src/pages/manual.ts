@@ -1,4 +1,4 @@
-﻿import type { Dialogue, DialogueMoment } from "../analysis/dialogue.ts";
+import type { Dialogue, DialogueMoment } from "../analysis/dialogue.ts";
 import { attachMoves, buildDialogue, fromMoves, fromTranscript } from "../analysis/dialogue.ts";
 import { MOVE_GLYPHS, MOVE_TYPES, SIDE_LABELS } from "../analysis/move.ts";
 import type { MoveType, Side } from "../analysis/move.ts";
@@ -77,7 +77,7 @@ export function renderManualPage(): Page {
         });
 
         const side = el("select", { class: "select line-side", attrs: { "aria-label": `Speaker of line ${index + 1}` } });
-        side.append(el("option", { text: "â€”", attrs: { value: "" } }));
+        side.append(el("option", { text: "—", attrs: { value: "" } }));
         for (const value of ["white", "black"] as const) {
           side.append(el("option", { text: SIDE_LABELS[value], attrs: { value } }));
         }
@@ -86,13 +86,49 @@ export function renderManualPage(): Page {
           if (dialogue !== null) dialogue.lines[index] = { ...(dialogue.lines[index] ?? line), speaker: sideValue(side.value) };
         });
 
+        const strength = el("input", {
+          class: "text-input strength-input",
+          attrs: {
+            type: "number",
+            min: "-3",
+            max: "3",
+            step: "0.5",
+            placeholder: "\u00b13",
+            "aria-label": `Strength of line ${index + 1}`,
+          },
+        });
+        strength.value = line.strength === null ? "" : String(line.strength);
+        strength.addEventListener("input", () => {
+          if (dialogue === null) return;
+          const value = strength.value.trim() === "" ? null : Number(strength.value);
+          dialogue.lines[index] = {
+            ...(dialogue.lines[index] ?? line),
+            strength: value === null || !Number.isFinite(value) ? null : Math.max(-3, Math.min(3, value)),
+          };
+        });
+
+        const motif = el("input", {
+          class: "text-input motif-input",
+          attrs: {
+            type: "text",
+            value: line.motif,
+            placeholder: "motif",
+            "aria-label": `Motif of line ${index + 1}`,
+          },
+        });
+        motif.addEventListener("input", () => {
+          if (dialogue !== null) dialogue.lines[index] = { ...(dialogue.lines[index] ?? line), motif: motif.value };
+        });
+
         return el("div", {
           class: "line-row",
           children: [
             el("span", { class: "line-number", text: String(index + 1) }),
-            el("span", { class: "move-time", text: `${formatTimestamp(line.start)}â€“${formatTimestamp(line.end)}` }),
+            el("span", { class: "move-time", text: `${formatTimestamp(line.start)}–${formatTimestamp(line.end)}` }),
             text,
             side,
+            strength,
+            motif,
           ],
         });
       }),
@@ -106,7 +142,7 @@ export function renderManualPage(): Page {
     const to = el("select", { class: "select", attrs: { "aria-label": "Last line of the moment" } });
     for (let lineIndex = 0; lineIndex < lineCount; lineIndex += 1) {
       const line = dialogue?.lines[lineIndex];
-      const label = `${lineIndex + 1} Â· ${line === undefined ? "" : formatTimestamp(line.start)}`;
+      const label = `${lineIndex + 1} · ${line === undefined ? "" : formatTimestamp(line.start)}`;
       from.append(el("option", { text: label, attrs: { value: String(lineIndex) } }));
       to.append(el("option", { text: label, attrs: { value: String(lineIndex) } }));
     }
@@ -226,7 +262,7 @@ export function renderManualPage(): Page {
     momentsHost.hidden = current === null;
     addButton.disabled = current === null;
     buildButton.disabled = current === null;
-    counter.textContent = current === null ? "" : `${current.lines.length} lines Â· ${current.moments.length} moments`;
+    counter.textContent = current === null ? "" : `${current.lines.length} lines · ${current.moments.length} moments`;
     renderLines();
     renderMoments();
   }
@@ -277,7 +313,7 @@ export function renderManualPage(): Page {
       return;
     }
     setMoves(result.moves);
-    setStatus(`${result.moves.length === 1 ? "1 move" : `${result.moves.length} moves`} built â€” open the Create page to render.`);
+    setStatus(`${result.moves.length === 1 ? "1 move" : `${result.moves.length} moves`} built — open the Create page to render.`);
   });
 
   renderAll();

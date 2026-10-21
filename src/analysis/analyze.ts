@@ -151,3 +151,38 @@ export async function analyzeDialogue(options: AnalyzeOptions): Promise<Analysis
 
   return { ok: false, attempts };
 }
+
+/** One more answer for the recovery window: the model sees its previous reply and the problems. */
+export async function extraAttempt(options: AnalyzeOptions, previous: AnalysisAttempt): Promise<AnalysisAttempt> {
+  const targets = targetMoves(options.segments);
+  const speakers = options.speakers ?? null;
+  const prompt = buildMovePrompt(options.segments, options.names, targets, speakers);
+  const messages: LlmChatMessage[] = [
+    ...prompt.messages,
+    { role: "assistant", content: previous.reply.slice(0, 6000) },
+    {
+      role: "user",
+      content:
+        `Your answer failed the checks:\n- ${previous.issues.join("\n- ") || "another variant is needed"}\n` +
+        'Return only corrected JSON in the shape {"moves": [...]}.',
+    },
+  ];
+
+  let reply = "";
+  let candidates: MoveCandidate[] | null = null;
+  let issues: string[] = [];
+  try {
+    reply = await chat({
+      provider: options.provider,
+      model: options.model,
+      messages,
+      schema: prompt.schema,
+      temperature: 0.6,
+    });
+    candidates = toCandidates(parseJson(reply), options.segments.length);
+    issues = reviewCandidates(candidates, options.segments, targets.min, speakers);
+  } catch (error) {
+    issues = [error instanceof Error ? error.message : String(error)];
+  }
+  return { index: previous.index + 1, issues, reply, candidates };
+}
