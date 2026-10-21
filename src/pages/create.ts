@@ -1,18 +1,19 @@
 import { exportMp4 } from "../media/export.ts";
-import { openMedia } from "../media/probe.ts";
-import type { OpenedMedia } from "../media/probe.ts";
+import { getClip, openClip, setClipRange } from "../media/session.ts";
+import type { Clip } from "../media/session.ts";
 import { el } from "../ui/dom.ts";
 import { formatBytes, formatClock, messageOf } from "../ui/text.ts";
+import { createTimeline } from "../ui/timeline.ts";
+import type { Timeline } from "../ui/timeline.ts";
 import type { Page } from "./page.ts";
 
 const PLAY_LABEL = "▶";
 const PAUSE_LABEL = "❚❚";
 
 export function renderCreatePage(): Page {
-  let media: OpenedMedia | null = null;
-  let objectUrl: string | null = null;
+  let clip: Clip | null = getClip();
+  let timeline: Timeline | null = null;
   let downloadUrl: string | null = null;
-  let fileName = "";
 
   const fileInput = el("input", {
     class: "visually-hidden",
@@ -27,14 +28,17 @@ export function renderCreatePage(): Page {
     text: PLAY_LABEL,
     attrs: { type: "button", "aria-label": "Play and pause" },
   });
-  const seek = el("input", {
-    class: "seek",
-    attrs: { type: "range", min: "0", max: "0", step: "0.01", value: "0", "aria-label": "Position" },
-  });
   const clock = el("span", { class: "clock", text: "0:00 / 0:00" });
+  const timelineHost = el("div", { class: "timeline-host" });
+  const selection = el("p", { class: "selection" });
   const player = el("div", {
     class: "player",
-    children: [video, el("div", { class: "transport", children: [playButton, seek, clock] })],
+    children: [
+      video,
+      el("div", { class: "transport", children: [playButton, clock] }),
+      timelineHost,
+      selection,
+    ],
   });
   player.hidden = true;
 
@@ -77,68 +81,70 @@ export function renderCreatePage(): Page {
     if (url !== null) URL.revokeObjectURL(url);
   }
 
-  function closeMedia(): void {
-    video.pause();
-    video.removeAttribute("src");
-    video.load();
-    revoke(objectUrl);
-    revoke(downloadUrl);
-    objectUrl = null;
-    downloadUrl = null;
-    media?.input.dispose();
-    media = null;
-    fileName = "";
-    player.hidden = true;
-    exportRow.hidden = true;
-    download.hidden = true;
-    meta.textContent = "";
-    seek.value = "0";
-    clock.textContent = "0:00 / 0:00";
+  function updateSelection(): void {
+    if (clip === null) return;
+    const { start, end } = clip.range;
+    selection.textContent = `Selection ${formatClock(start)} – ${formatClock(end)} · ${(end - start).toFixed(1)} s`;
+    timeline?.setRange({ start, end });
   }
 
-  function outputName(): string {
-    const base = fileName.replace(/\.[^.]+$/, "") || "clip";
-    return `${base}.mp4`;
+  function showClip(next: Clip): void {
+    clip = next;
+    const info = next.media.info;
+    video.src = next.objectUrl;
+    meta.textContent = [
+      `${info.width}×${info.height}`,
+      formatClock(info.duration),
+      formatBytes(next.file.size),
+      info.hasAudio ? "with audio" : "without audio",
+    ].join(" · ");
+    player.hidden = false;
+    exportRow.hidden = false;
+    download.hidden = true;
+    timeline = createTimeline({
+      duration: info.duration,
+      range: next.range,
+      onChange: (range) => {
+        const updated = setClipRange(range);
+        if (updated === null) return;
+        clip = updated;
+        updateSelection();
+        if (video.currentTime < range.start || video.currentTime > range.end) {
+          video.currentTime = range.start;
+        }
+      },
+      onSeek: (time) => {
+        video.currentTime = time;
+      },
+    });
+    timelineHost.replaceChildren(timeline.element);
+    updateSelection();
+    clock.textContent = `0:00 / ${formatClock(info.duration)}`;
+    setStatus(next.file.name);
   }
 
   async function openFile(file: File): Promise<void> {
     setStatus(`Opening ${file.name}…`);
-    closeMedia();
     try {
-      const opened = await openMedia(file);
-      media = opened;
-      fileName = file.name;
-      objectUrl = URL.createObjectURL(file);
-      video.src = objectUrl;
-      seek.max = String(opened.info.duration);
-      clock.textContent = `0:00 / ${formatClock(opened.info.duration)}`;
-      meta.textContent = [
-        `${opened.info.width}×${opened.info.height}`,
-        formatClock(opened.info.duration),
-        formatBytes(file.size),
-        opened.info.hasAudio ? "with audio" : "without audio",
-      ].join(" · ");
-      player.hidden = false;
-      exportRow.hidden = false;
-      setStatus(file.name);
+      showClip(await openClip(file));
     } catch (error) {
       setStatus(messageOf(error));
     }
   }
 
   async function runExport(): Promise<void> {
-    if (media === null) return;
+    if (clip === null) return;
     exportButton.disabled = true;
     download.hidden = true;
     progress.value = 0;
     setStatus("Rendering MP4…");
     try {
       const blob = await exportMp4({
-        video: media.video,
-        audio: media.audio,
-        width: media.info.width,
-        height: media.info.height,
-        duration: media.info.duration,
+        video: clip.media.video,
+        audio: clip.media.audio,
+        width: clip.media.info.width,
+        height: clip.media.info.height,
+        range: clip.range,
         onProgress: (fraction) => {
           progress.value = fraction;
         },
@@ -146,7 +152,7 @@ export function renderCreatePage(): Page {
       revoke(downloadUrl);
       downloadUrl = URL.createObjectURL(blob);
       download.href = downloadUrl;
-      download.download = outputName();
+      download.download = `${clip.file.name.replace(/\.[^.]+$/, "") || "clip"}.mp4`;
       download.hidden = false;
       setStatus(`Done: ${formatBytes(blob.size)}`);
     } catch (error) {
@@ -154,6 +160,17 @@ export function renderCreatePage(): Page {
     } finally {
       exportButton.disabled = false;
     }
+  }
+
+  function togglePlay(): void {
+    if (clip === null) return;
+    if (!video.paused) {
+      video.pause();
+      return;
+    }
+    const { start, end } = clip.range;
+    if (video.currentTime < start || video.currentTime >= end) video.currentTime = start;
+    void video.play();
   }
 
   dropZone.addEventListener("click", () => fileInput.click());
@@ -174,11 +191,11 @@ export function renderCreatePage(): Page {
     if (file !== undefined) void openFile(file);
   });
 
-  playButton.addEventListener("click", () => {
-    if (video.paused) void video.play();
-    else video.pause();
-  });
+  playButton.addEventListener("click", togglePlay);
 
+  video.addEventListener("loadedmetadata", () => {
+    if (clip !== null) video.currentTime = clip.range.start;
+  });
   video.addEventListener("play", () => {
     playButton.textContent = PAUSE_LABEL;
   });
@@ -186,16 +203,30 @@ export function renderCreatePage(): Page {
     playButton.textContent = PLAY_LABEL;
   });
   video.addEventListener("timeupdate", () => {
-    seek.value = String(video.currentTime);
-    clock.textContent = `${formatClock(video.currentTime)} / ${formatClock(video.duration)}`;
-  });
-  seek.addEventListener("input", () => {
-    video.currentTime = Number(seek.value);
+    const time = video.currentTime;
+    timeline?.setPlayhead(time);
+    clock.textContent = `${formatClock(time)} / ${formatClock(video.duration)}`;
+    if (clip !== null && !video.paused && time >= clip.range.end) {
+      video.pause();
+      video.currentTime = clip.range.end;
+    }
   });
 
   exportButton.addEventListener("click", () => {
     void runExport();
   });
 
-  return { element, dispose: closeMedia };
+  if (clip !== null) showClip(clip);
+
+  return {
+    element,
+    dispose() {
+      // The session keeps the blob URL and the tracks: only this page's video goes away.
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+      revoke(downloadUrl);
+      downloadUrl = null;
+    },
+  };
 }

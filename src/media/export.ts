@@ -10,12 +10,14 @@ import {
 } from "mediabunny";
 import type { InputAudioTrack, InputVideoTrack } from "mediabunny";
 
+import type { TimeRange } from "./range.ts";
+
 export interface ExportRequest {
   video: InputVideoTrack;
   audio: InputAudioTrack | null;
   width: number;
   height: number;
-  duration: number;
+  range: TimeRange;
   onProgress?: (fraction: number) => void;
 }
 
@@ -23,14 +25,34 @@ function evenDimension(value: number): number {
   return Math.max(2, Math.round(value / 2) * 2);
 }
 
+/** The kept part of a decoded audio chunk, as its own buffer. */
+function sliceAudio(buffer: AudioBuffer, from: number, to: number): AudioBuffer {
+  if (from <= 0 && to >= buffer.duration) return buffer;
+  const rate = buffer.sampleRate;
+  const first = Math.max(0, Math.round(from * rate));
+  const last = Math.min(buffer.length, Math.round(to * rate));
+  const length = Math.max(0, last - first);
+  const slice = new AudioBuffer({
+    numberOfChannels: buffer.numberOfChannels,
+    length,
+    sampleRate: rate,
+  });
+  for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
+    slice.copyToChannel(buffer.getChannelData(channel).subarray(first, first + length), channel);
+  }
+  return slice;
+}
+
 /**
- * Re-encodes the whole track into an MP4: decode frame by frame, draw it onto one
+ * Re-encodes one range into an MP4: decode frame by frame, draw it onto one
  * canvas, encode. The canvas is the single place overlays will be drawn later.
  */
 export async function exportMp4(request: ExportRequest): Promise<Blob> {
   const width = evenDimension(request.width);
   const height = evenDimension(request.height);
-  const { duration } = request;
+  const { start, end } = request.range;
+  const duration = end - start;
+  if (!(duration > 0)) throw new Error("the export range is empty");
 
   const canvas = new OffscreenCanvas(width, height);
   const context = canvas.getContext("2d");
@@ -48,15 +70,21 @@ export async function exportMp4(request: ExportRequest): Promise<Blob> {
 
   await output.start();
   try {
-    for await (const frame of frames.canvases(0, duration)) {
+    for await (const frame of frames.canvases(start, end)) {
+      const from = Math.max(frame.timestamp, start);
+      const to = Math.min(frame.timestamp + frame.duration, end);
+      if (to <= from) continue;
       context.drawImage(frame.canvas, 0, 0, width, height);
-      await videoSource.add(frame.timestamp, frame.duration);
-      request.onProgress?.(Math.min(0.95, frame.timestamp / duration));
+      await videoSource.add(from - start, to - from);
+      request.onProgress?.(Math.min(0.95, (from - start) / duration));
     }
 
     if (audioSource !== null && request.audio !== null) {
-      for await (const chunk of new AudioBufferSink(request.audio).buffers(0, duration)) {
-        await audioSource.add(chunk.buffer);
+      for await (const chunk of new AudioBufferSink(request.audio).buffers(start, end)) {
+        const from = Math.max(chunk.timestamp, start);
+        const to = Math.min(chunk.timestamp + chunk.buffer.duration, end);
+        if (to <= from) continue;
+        await audioSource.add(sliceAudio(chunk.buffer, from - chunk.timestamp, to - chunk.timestamp));
       }
     }
 

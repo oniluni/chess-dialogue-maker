@@ -26,6 +26,9 @@ Node 26 runs the `.ts` files directly, so every import keeps its explicit `.ts` 
 and health polling (`api.ts`). Pages live in `pages/` — one module each, and `dispose()`
 releases its media — while decoding, encoding and probing sit in `media/`.
 
+The opened clip and its kept range live in `media/session.ts`: pages read the session,
+update it, and never own the blob URL or the tracks.
+
 ## Rules
 
 Explicit user instructions override these defaults.
