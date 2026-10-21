@@ -327,3 +327,70 @@ body {
   accent-color: var(--accent);
 }
 
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.move-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.move-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.move-index,
+.move-time,
+.move-eval {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.move-index {
+  width: 20px;
+}
+
+.move-time {
+  width: 96px;
+}
+
+.move-badge {
+  width: 24px;
+  color: var(--accent);
+  font-weight: 600;
+  text-align: center;
+}
+
+.move-side {
+  width: 52px;
+  color: var(--muted);
+}
+
+.move-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.move-eval {
+  width: 48px;
+  text-align: right;
+}
+

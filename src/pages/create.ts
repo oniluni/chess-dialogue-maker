@@ -1,8 +1,8 @@
 import { exportMp4 } from "../media/export.ts";
-import { getClip, openClip, setClipRange } from "../media/session.ts";
-import type { Clip } from "../media/session.ts";
+import { getClip, openClip, setClipRange } from "../session.ts";
+import type { Clip } from "../session.ts";
 import { el } from "../ui/dom.ts";
-import { formatBytes, formatClock, messageOf } from "../ui/text.ts";
+import { formatBytes, formatClock, formatTimestamp, messageOf } from "../ui/text.ts";
 import { createTimeline } from "../ui/timeline.ts";
 import type { Timeline } from "../ui/timeline.ts";
 import type { Page } from "./page.ts";
@@ -28,7 +28,7 @@ export function renderCreatePage(): Page {
     text: PLAY_LABEL,
     attrs: { type: "button", "aria-label": "Play and pause" },
   });
-  const clock = el("span", { class: "clock", text: "0:00 / 0:00" });
+  const clock = el("span", { class: "clock", text: "0:00.0 / 0:00.0" });
   const timelineHost = el("div", { class: "timeline-host" });
   const selection = el("p", { class: "selection" });
   const player = el("div", {
@@ -84,7 +84,7 @@ export function renderCreatePage(): Page {
   function updateSelection(): void {
     if (clip === null) return;
     const { start, end } = clip.range;
-    selection.textContent = `Selection ${formatClock(start)} – ${formatClock(end)} · ${(end - start).toFixed(1)} s`;
+    selection.textContent = `Selection ${formatTimestamp(start)} – ${formatTimestamp(end)} · ${(end - start).toFixed(1)} s`;
     timeline?.setRange({ start, end });
   }
 
@@ -119,7 +119,7 @@ export function renderCreatePage(): Page {
     });
     timelineHost.replaceChildren(timeline.element);
     updateSelection();
-    clock.textContent = `0:00 / ${formatClock(info.duration)}`;
+    clock.textContent = `0:00.0 / ${formatTimestamp(info.duration)}`;
     setStatus(next.file.name);
   }
 
@@ -205,7 +205,7 @@ export function renderCreatePage(): Page {
   video.addEventListener("timeupdate", () => {
     const time = video.currentTime;
     timeline?.setPlayhead(time);
-    clock.textContent = `${formatClock(time)} / ${formatClock(video.duration)}`;
+    clock.textContent = `${formatTimestamp(time)} / ${formatTimestamp(video.duration)}`;
     if (clip !== null && !video.paused && time >= clip.range.end) {
       video.pause();
       video.currentTime = clip.range.end;
