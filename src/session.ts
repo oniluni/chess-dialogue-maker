@@ -1,7 +1,8 @@
-import type { AnalysisAttempt } from "./analysis/analyze.ts";
+﻿import type { AnalysisAttempt } from "./analysis/analyze.ts";
 import type { Dialogue } from "./analysis/dialogue.ts";
 import type { Move, Side } from "./analysis/move.ts";
 import type { SpeakerHint } from "../shared/speakers.ts";
+import type { FacesResult } from "../shared/people.ts";
 import { DEFAULT_SCHEDULE_OPTIONS } from "./analysis/schedule.ts";
 import type { ScheduleOptions } from "./analysis/schedule.ts";
 import type { TranscriptSegment } from "./analysis/transcript.ts";
@@ -48,6 +49,31 @@ let llm: LlmChoice = { provider: "", model: "" };
 let recovery: RecoveryState | null = null;
 let dialogue: Dialogue | null = null;
 let speakerHints: SpeakerHints | null = null;
+let people: FacesResult | null = null;
+let cast: CastEntry[] = [];
+
+export function getPeople(): FacesResult | null {
+  return people;
+}
+
+export function setPeople(next: FacesResult | null): void {
+  people = next;
+  if (next === null) cast = [];
+}
+
+export function getCast(): CastEntry[] {
+  return cast;
+}
+
+export function setCast(next: CastEntry[]): void {
+  cast = next;
+}
+
+export interface CastEntry {
+  person: number;
+  name: string;
+  side: Side | null;
+}
 
 export function getSpeakerHints(): SpeakerHints | null {
   return speakerHints;
@@ -104,6 +130,8 @@ export function getTranscript(): TranscriptSegment[] {
 export function setTranscript(next: TranscriptSegment[]): void {
   transcript = next;
   speakerHints = null;
+  people = null;
+  cast = [];
 }
 
 export function getClip(): Clip | null {
@@ -160,4 +188,7 @@ export function closeClip(): void {
   recovery = null;
   dialogue = null;
   speakerHints = null;
+  people = null;
+  cast = [];
 }
+

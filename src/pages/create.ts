@@ -22,6 +22,7 @@ import { createAnalysisPanel } from "./analysis-panel.ts";
 import { createAudioPanel } from "./audio-panel.ts";
 import { createExportRow } from "./export-row.ts";
 import type { Page } from "./page.ts";
+import { createCastPanel } from "./people-panel.ts";
 import { PreviewPlayer } from "./preview-player.ts";
 import { createUrlPanel } from "./url-panel.ts";
 import type { Trim } from "./url-panel.ts";
@@ -73,6 +74,8 @@ export function renderCreatePage(): Page {
       updateSelection();
     },
   });
+
+  const cast = createCastPanel();
 
   const playButton = el("button", {
     class: "button",
@@ -149,6 +152,7 @@ export function renderCreatePage(): Page {
       status,
       meta,
       analysis.element,
+      cast.element,
       names,
       playerRow,
       exportRow.element,

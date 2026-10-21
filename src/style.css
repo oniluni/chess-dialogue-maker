@@ -713,3 +713,30 @@ body {
   color: var(--muted);
   font-size: 13px;
 }
+
+.cast-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.cast-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cast-person {
+  width: 84px;
+  color: var(--muted);
+}
+
+.cast-row .text-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.cast-row .select {
+  width: 130px;
+}
