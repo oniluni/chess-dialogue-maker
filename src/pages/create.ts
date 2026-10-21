@@ -5,12 +5,13 @@ import { exportMp4 } from "../media/export.ts";
 import { createScene } from "../render/scene.ts";
 import { loadSceneAvatars } from "../render/avatar.ts";
 import { clearAvatars } from "../render/avatar-store.ts";
-import { getPeople } from "../session.ts";
 import {
   getClip,
   getMoves,
   getNames,
+  getPeople,
   getScheduleOptions,
+  getTranscript,
   openClip,
   setClipRange,
   setNames,
@@ -36,7 +37,7 @@ const PAUSE_LABEL = "❚❚";
 export function renderCreatePage(): Page {
   let clip: Clip | null = getClip();
   let timeline: Timeline | null = null;
-  let scene = createScene(getMoves(), getNames());
+  let scene = createScene(getMoves(), getNames(), null, null, getTranscript());
 
   const soundBoard = new SoundBoard();
   soundBoard.setVolume(getScheduleOptions().sfxVolume);
@@ -97,6 +98,13 @@ export function renderCreatePage(): Page {
     children: [pauseToggle, el("span", { text: "Pause on each move" })],
   });
 
+  const subtitleToggle = el("input", { attrs: { type: "checkbox" } });
+  subtitleToggle.checked = getScheduleOptions().subtitles;
+  const subtitleOption = el("label", {
+    class: "option",
+    children: [subtitleToggle, el("span", { text: "Subtitles" })],
+  });
+
   const timelineHost = el("div", { class: "timeline-host" });
   const selection = el("p", { class: "selection" });
   const playerRow = el("div", {
@@ -106,6 +114,7 @@ export function renderCreatePage(): Page {
       video,
       el("div", { class: "transport", children: [playButton, clock] }),
       pauseOption,
+      subtitleOption,
       createAudioPanel(soundBoard),
       timelineHost,
       selection,
@@ -186,7 +195,7 @@ export function renderCreatePage(): Page {
   function rebuildScene(): void {
     void (async (): Promise<void> => {
       const avatars = await loadSceneAvatars();
-      scene = createScene(getMoves(), getNames(), avatars, getPeople()?.frames ?? null);
+      scene = createScene(getMoves(), getNames(), avatars, getPeople()?.frames ?? null, getTranscript());
       canvas.width = scene.width;
       canvas.height = scene.height;
       preview.draw();
@@ -294,6 +303,10 @@ export function renderCreatePage(): Page {
   pauseToggle.addEventListener("change", () => {
     setScheduleOptions({ pauseOnMove: pauseToggle.checked });
     updateSelection();
+  });
+  subtitleToggle.addEventListener("change", () => {
+    setScheduleOptions({ subtitles: subtitleToggle.checked });
+    rebuildScene();
   });
   whiteName.addEventListener("input", () => {
     setNames({ white: whiteName.value });

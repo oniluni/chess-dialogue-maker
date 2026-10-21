@@ -20,6 +20,8 @@ export interface ScheduleOptions {
   sfxTyping: boolean;
   sfxTypingSet: string;
   sfxPauseSet: string;
+  /** Show the dialogue line over the video. */
+  subtitles: boolean;
 }
 
 export const DEFAULT_SCHEDULE_OPTIONS: ScheduleOptions = {
@@ -33,6 +35,7 @@ export const DEFAULT_SCHEDULE_OPTIONS: ScheduleOptions = {
   sfxTyping: true,
   sfxTypingSet: "soft",
   sfxPauseSet: "wood",
+  subtitles: false,
 };
 
 export interface PlaySegment {

@@ -4,6 +4,8 @@ import type { Names } from "../names.ts";
 import type { FrameFaces } from "../../shared/people.ts";
 import type { SceneAvatars } from "./avatar.ts";
 import { getStyle } from "./style.ts";
+import type { TranscriptSegment } from "../analysis/transcript.ts";
+import { getScheduleOptions } from "../session.ts";
 import type { FrameState } from "./state.ts";
 import { ellipsize, setFont, wrapLines } from "./text.ts";
 
@@ -423,6 +425,7 @@ export function createScene(
   names: Names,
   avatars: SceneAvatars | null = null,
   frames: FrameFaces[] | null = null,
+  subtitles: TranscriptSegment[] | null = null,
 ): Scene {
   const measure = new OffscreenCanvas(1, 1).getContext("2d");
   if (measure === null) throw new Error("the browser did not provide a 2D context for the card");
@@ -436,6 +439,45 @@ export function createScene(
   const evalTop = playersTop + PLAYERS_H + EVAL_GAP;
   const uiHeight = evalTop + EVAL_H;
 
+  function drawSubtitle(
+    ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    time: number,
+  ): void {
+    if (subtitles === null || !getScheduleOptions().subtitles) return;
+    const line = subtitles.find((segment) => time >= segment.start && time <= segment.end);
+    if (line === undefined || line.text.trim() === "") return;
+
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    setFont(ctx, 400, 34);
+    const maxWidth = WIDTH - 120;
+    const words = line.text.split(/\s+/);
+    const lines: string[] = [];
+    let current = "";
+    for (const word of words) {
+      const next = current === "" ? word : `${current} ${word}`;
+      if (ctx.measureText(next).width > maxWidth && current !== "") {
+        lines.push(current);
+        current = word;
+      } else {
+        current = next;
+      }
+    }
+    if (current !== "") lines.push(current);
+
+    const lineHeight = 44;
+    const bottom = HEIGHT - 70;
+    const top = bottom - lines.length * lineHeight;
+    ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+    ctx.fillRect(0, top - 14, WIDTH, lines.length * lineHeight + 28);
+    ctx.fillStyle = "#ffffff";
+    lines.forEach((text, index) => {
+      ctx.fillText(text, WIDTH / 2, top + (index + 1) * lineHeight - 10);
+    });
+    ctx.restore();
+  }
+
   return {
     width: WIDTH,
     height: HEIGHT,
@@ -445,6 +487,7 @@ export function createScene(
       ctx.fillStyle = getStyle().pageBg;
       ctx.fillRect(0, 0, WIDTH, HEIGHT);
       drawVideo(ctx, source, uiHeight, time, frames);
+      drawSubtitle(ctx, time);
 
       const current = cards[state.moveIndex];
       if (state.moveIndex < 0 || current === undefined) {
