@@ -105,6 +105,11 @@ Two halves. The browser owns media: `mediabunny` demuxes, decodes and encodes on
 so trim, preview and export need no ffmpeg. The Node backend owns whatever needs a binary or
 a native model — downloads, speech, inference — because a page cannot load those.
 
+Speech runs on the backend with `@huggingface/transformers` (whisper); the page extracts a
+16 kHz mono WAV with `mediabunny` and posts it to `/api/transcribe`. The model is chosen by
+`WHISPER_MODEL`, the default language by `WHISPER_LANGUAGE`, and the download is cached in
+`.cache/transformers`.
+
 ## UI
 
 No framework: components, state and routing are hand-rolled and typed. UI copy is English.

@@ -2,10 +2,13 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { ErrorResponse, HealthResponse } from "../shared/api.ts";
 import type { LlmChatMessage, LlmChatRequest, LlmErrorBody } from "../shared/llm.ts";
+import type { TranscriptionResponse } from "../shared/transcribe.ts";
 import { chat, LlmError, models, providers } from "./llm.ts";
+import { defaultLanguage, modelName, transcribe } from "./transcribe.ts";
 
 const startedAt = Date.now();
 const MAX_BODY_BYTES = 2_000_000;
+const MAX_AUDIO_BYTES = 120_000_000;
 
 /** A malformed request: the UI only needs the message, but the status must stay honest. */
 class BadRequest extends Error {
@@ -60,6 +63,18 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   }
 }
 
+async function readBinaryBody(request: IncomingMessage, limit: number): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const buffer = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > limit) throw new BadRequest("The audio is too large", "", 413);
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks);
+}
+
 function chatRequest(value: unknown): LlmChatRequest {
   if (!isRecord(value)) throw new BadRequest("The request body must be a JSON object");
 
@@ -103,7 +118,11 @@ function fail(response: ServerResponse, error: unknown): void {
     sendJson(response, 502, body);
     return;
   }
-  throw error;
+  // Anything else — a missing model file, a crashed pipeline — still has to reach the UI.
+  console.error("request failed:", error);
+  const hint = error instanceof Error ? error.message : String(error);
+  const body: LlmErrorBody = { error: "llm_error", title: "The request failed", hint };
+  sendJson(response, 500, body);
 }
 
 function methodNotAllowed(response: ServerResponse): void {
@@ -154,6 +173,26 @@ export async function handleApi(
     try {
       const payload = chatRequest(await readJsonBody(request));
       sendJson(response, 200, { text: await chat(payload) });
+    } catch (error) {
+      fail(response, error);
+    }
+    return;
+  }
+
+  if (url.pathname === "/api/transcribe") {
+    if (method === "GET") {
+      sendJson(response, 200, { model: modelName(), language: defaultLanguage() });
+      return;
+    }
+    if (method !== "POST") return methodNotAllowed(response);
+    try {
+      const requested = url.searchParams.get("language")?.trim() ?? "";
+      const language = /^[a-z]{2,3}$/.test(requested) ? requested : defaultLanguage();
+      const wav = await readBinaryBody(request, MAX_AUDIO_BYTES);
+      if (wav.length === 0) throw new BadRequest("The request has no audio");
+      const segments = await transcribe(wav, language);
+      const body: TranscriptionResponse = { segments, language, model: modelName() };
+      sendJson(response, 200, body);
     } catch (error) {
       fail(response, error);
     }

@@ -1,8 +1,10 @@
 import type { LlmModelInfo, LlmProviderInfo } from "../../shared/llm.ts";
 import { analyzeDialogue } from "../analysis/analyze.ts";
 import type { Move } from "../analysis/move.ts";
+import { transcribeWav, transcriptionInfo } from "../analysis/transcribe.ts";
 import { parseTranscript } from "../analysis/transcript.ts";
 import { listModels, listProviders } from "../llm/api.ts";
+import { extractWav } from "../media/wav.ts";
 import {
   getClip,
   getLlmChoice,
@@ -14,6 +16,21 @@ import {
 } from "../session.ts";
 import { el } from "../ui/dom.ts";
 import { formatTimestamp, messageOf } from "../ui/text.ts";
+
+const LANGUAGES = [
+  { id: "ru", label: "Russian" },
+  { id: "en", label: "English" },
+  { id: "uk", label: "Ukrainian" },
+  { id: "es", label: "Spanish" },
+  { id: "fr", label: "French" },
+  { id: "de", label: "German" },
+  { id: "it", label: "Italian" },
+  { id: "pt", label: "Portuguese" },
+  { id: "pl", label: "Polish" },
+  { id: "tr", label: "Turkish" },
+  { id: "zh", label: "Chinese" },
+  { id: "ja", label: "Japanese" },
+];
 
 export interface AnalysisPanel {
   element: HTMLElement;
@@ -32,6 +49,12 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
     attrs: { type: "file", accept: ".json,application/json" },
   });
   const importButton = el("button", { class: "button", text: "Import transcript", attrs: { type: "button" } });
+  const transcribeButton = el("button", { class: "button", text: "Transcribe", attrs: { type: "button" } });
+  const languageSelect = el("select", {
+    class: "select",
+    attrs: { "aria-label": "Speech language" },
+    children: LANGUAGES.map((language) => el("option", { text: language.label, attrs: { value: language.id } })),
+  });
   const transcriptInfo = el("span", { class: "meta" });
   const providerSelect = el("select", { class: "select", attrs: { "aria-label": "Provider" } });
   const modelSelect = el("select", { class: "select", attrs: { "aria-label": "Model" } });
@@ -46,7 +69,15 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
     class: "analysis",
     children: [
       el("h2", { class: "section-title", text: "Dialogue and analysis" }),
-      el("div", { class: "toolbar", children: [importButton, transcriptInfo] }),
+      el("div", {
+        class: "toolbar",
+        children: [
+          transcribeButton,
+          el("label", { class: "field", children: [el("span", { text: "Language" }), languageSelect] }),
+          importButton,
+          transcriptInfo,
+        ],
+      }),
       el("div", {
         class: "toolbar",
         children: [
@@ -80,6 +111,7 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
     }
     analyzeButton.disabled =
       clip === null || segments.length === 0 || providerSelect.value === "" || modelSelect.value === "";
+    transcribeButton.disabled = clip === null;
   }
 
   function fillProviders(): void {
@@ -157,6 +189,43 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
     refresh();
   }
 
+  async function transcribe(): Promise<void> {
+    const clip = getClip();
+    if (clip === null) return;
+
+    transcribeButton.disabled = true;
+    setStatus("Extracting the audio…");
+    try {
+      const wav = await extractWav(clip.file);
+      if (disposed) return;
+      setStatus("Transcribing… the first run downloads the model.");
+      const segments = await transcribeWav(wav, languageSelect.value);
+      if (disposed) return;
+      setTranscript(segments);
+      setStatus(`Transcribed ${segments.length} lines`);
+    } catch (error) {
+      if (!disposed) setStatus(messageOf(error));
+    } finally {
+      if (!disposed) {
+        transcribeButton.disabled = false;
+        refresh();
+      }
+    }
+  }
+
+  async function loadTranscriptionInfo(): Promise<void> {
+    try {
+      const info = await transcriptionInfo();
+      if (disposed) return;
+      if (LANGUAGES.every((language) => language.id !== info.language)) {
+        languageSelect.append(el("option", { text: info.language, attrs: { value: info.language } }));
+      }
+      languageSelect.value = info.language;
+    } catch (error) {
+      if (!disposed) setStatus(`Speech settings unavailable: ${messageOf(error)}`);
+    }
+  }
+
   async function analyze(): Promise<void> {
     const clip = getClip();
     const segments = getTranscript();
@@ -189,6 +258,9 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
   }
 
   importButton.addEventListener("click", () => fileInput.click());
+  transcribeButton.addEventListener("click", () => {
+    void transcribe();
+  });
   fileInput.addEventListener("change", () => {
     const file = fileInput.files?.[0];
     if (file !== undefined) void importTranscript(file);
@@ -206,6 +278,7 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
   });
 
   void loadProviders();
+  void loadTranscriptionInfo();
   refresh();
 
   return {

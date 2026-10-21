@@ -10,5 +10,8 @@ dist/
 # secrets
 .env
 
+# downloaded models
+.cache/
+
 # tmp files -> remove before merge this shit
 old/
