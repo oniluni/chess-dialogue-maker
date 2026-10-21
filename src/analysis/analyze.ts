@@ -1,4 +1,4 @@
-import type { LlmChatMessage } from "../../shared/llm.ts";
+﻿import type { LlmChatMessage } from "../../shared/llm.ts";
 import { chat } from "../llm/api.ts";
 import type { Names } from "../names.ts";
 import { MOVE_TYPES, sanitizeMoves } from "./move.ts";
@@ -27,6 +27,7 @@ export interface AnalyzeOptions {
   model: string;
   duration: number | null;
   speakers?: SpeakerContext | null;
+  sounds?: Array<{ start: number; label: string }>;
   onAttempt?: (attempt: number, total: number) => void;
 }
 
@@ -102,7 +103,7 @@ function toCandidates(value: unknown, total: number): MoveCandidate[] {
 export async function analyzeDialogue(options: AnalyzeOptions): Promise<AnalysisResult> {
   const targets = targetMoves(options.segments);
   const speakers = options.speakers ?? null;
-  const prompt = buildMovePrompt(options.segments, options.names, targets, speakers);
+  const prompt = buildMovePrompt(options.segments, options.names, targets, speakers, options.sounds ?? []);
   const attempts: AnalysisAttempt[] = [];
   let messages: LlmChatMessage[] = prompt.messages;
 
@@ -156,7 +157,7 @@ export async function analyzeDialogue(options: AnalyzeOptions): Promise<Analysis
 export async function extraAttempt(options: AnalyzeOptions, previous: AnalysisAttempt): Promise<AnalysisAttempt> {
   const targets = targetMoves(options.segments);
   const speakers = options.speakers ?? null;
-  const prompt = buildMovePrompt(options.segments, options.names, targets, speakers);
+  const prompt = buildMovePrompt(options.segments, options.names, targets, speakers, options.sounds ?? []);
   const messages: LlmChatMessage[] = [
     ...prompt.messages,
     { role: "assistant", content: previous.reply.slice(0, 6000) },
@@ -186,3 +187,4 @@ export async function extraAttempt(options: AnalyzeOptions, previous: AnalysisAt
   }
   return { index: previous.index + 1, issues, reply, candidates };
 }
+

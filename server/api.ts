@@ -5,14 +5,17 @@ import type { ErrorResponse, HealthResponse } from "../shared/api.ts";
 import type { LlmChatMessage, LlmChatRequest, LlmErrorBody } from "../shared/llm.ts";
 import type { FacesRequest } from "../shared/people.ts";
 import type { DiarizationRequest, DiarizationResponse } from "../shared/speakers.ts";
+import type { ProsodyRequest, ProsodyResponse, SoundsResponse } from "../shared/sounds.ts";
 import type { TranscriptionResponse } from "../shared/transcribe.ts";
 import { fileOf, removeJob, startDownload, statusOf } from "./download.ts";
 import type { DownloadRequest } from "./download.ts";
 import { chat, LlmError, models, providers } from "./llm.ts";
 import { diarize } from "./speakers.ts";
 import { analyzeFrames } from "./vision.ts";
+import { SAMPLE_RATE, decodeWav } from "./wav.ts";
+import { detectProsody } from "./prosody.ts";
+import { classify, SOUND_MODEL } from "./yamnet.ts";
 import { defaultLanguage, modelName, transcribe } from "./transcribe.ts";
-import { decodeWav } from "./wav.ts";
 
 const startedAt = Date.now();
 const MAX_BODY_BYTES = 2_000_000;
@@ -169,6 +172,28 @@ function speakersRequest(value: unknown): DiarizationRequest {
   return { wav, segments };
 }
 
+function prosodyRequest(value: unknown): ProsodyRequest {
+  if (!isRecord(value)) throw new BadRequest("The request body must be a JSON object");
+  const wav = value["wav"];
+  if (typeof wav !== "string" || wav === "") throw new BadRequest('"wav" must hold base64 audio');
+  const raw = value["segments"];
+  if (!Array.isArray(raw) || raw.length === 0) throw new BadRequest('"segments" must be a non-empty array');
+  if (raw.length > 500) throw new BadRequest("Too many segments");
+
+  const segments = raw.map((item, index) => {
+    if (!isRecord(item)) throw new BadRequest(`segments[${index}] must be an object`);
+    const start = item["start"];
+    const end = item["end"];
+    const label = item["label"];
+    if (typeof start !== "number" || typeof end !== "number" || end <= start) {
+      throw new BadRequest(`segments[${index}]: bad times`);
+    }
+    if (label !== null && label !== "A" && label !== "B") throw new BadRequest(`segments[${index}]: bad label`);
+    const voice: "A" | "B" | null = label === "A" ? "A" : label === "B" ? "B" : null;
+    return { start, end, label: voice };
+  });
+  return { wav, segments };
+}
 function facesRequest(value: unknown): FacesRequest {
   if (!isRecord(value)) throw new BadRequest("The request body must be a JSON object");
   const raw = value["frames"];
@@ -209,7 +234,7 @@ function fail(response: ServerResponse, error: unknown): void {
     sendJson(response, 502, body);
     return;
   }
-  // Anything else — a missing model file, a crashed pipeline — still has to reach the UI.
+  // Anything else Ã¢â‚¬â€Ã‚Â a missing model file, a crashed pipeline Ã¢â‚¬â€Ã‚Â still has to reach the UI.
   console.error("request failed:", error);
   const hint = error instanceof Error ? error.message : String(error);
   const body: LlmErrorBody = { error: "llm_error", title: "The request failed", hint };
@@ -283,6 +308,37 @@ export async function handleApi(
       if (wav.length === 0) throw new BadRequest("The request has no audio");
       const segments = await transcribe(wav, language);
       const body: TranscriptionResponse = { segments, language, model: modelName() };
+      sendJson(response, 200, body);
+    } catch (error) {
+      fail(response, error);
+    }
+    return;
+  }
+
+  if (url.pathname === "/api/prosody") {
+    if (method !== "POST") return methodNotAllowed(response);
+    try {
+      const payload = prosodyRequest(await readJsonBody(request, 40_000_000));
+      const wav = Buffer.from(payload.wav, "base64");
+      if (wav.length === 0) throw new BadRequest("The request has no audio");
+      const pcm = decodeWav(wav);
+      const result = detectProsody(pcm, payload.segments);
+      const body: ProsodyResponse = { events: result.events, samples: result.samples };
+      sendJson(response, 200, body);
+    } catch (error) {
+      fail(response, error);
+    }
+    return;
+  }
+
+  if (url.pathname === "/api/sounds") {
+    if (method !== "POST") return methodNotAllowed(response);
+    try {
+      const wav = await readBinaryBody(request, MAX_AUDIO_BYTES);
+      if (wav.length === 0) throw new BadRequest("The request has no audio");
+      const pcm = decodeWav(wav);
+      const duration = pcm.length / SAMPLE_RATE;
+      const body: SoundsResponse = { events: await classify(pcm, duration), model: SOUND_MODEL };
       sendJson(response, 200, body);
     } catch (error) {
       fail(response, error);
@@ -370,4 +426,8 @@ export async function handleApi(
     return;
   }
 }
+
+
+
+
 

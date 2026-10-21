@@ -110,12 +110,20 @@ export function buildMovePrompt(
   names: Names,
   targets: { min: number; max: number },
   speakers: SpeakerContext | null = null,
+  sounds: Array<{ start: number; label: string }> = [],
 ): MovePrompt {
   const mapping =
     speakers === null
       ? ""
       : `\nLines marked voice A or voice B are spoken by different people. One move never mixes labels, ` +
         `and speaker must follow the mapping: voice A is ${names[speakers.sides.A]}, voice B is ${names[speakers.sides.B]}.`;
+
+  const soundLines =
+    sounds.length === 0
+      ? ""
+      : `\n\nSound events (context only, never invent them as dialogue):\n${sounds
+          .map((sound) => `${clock(sound.start)} — ${sound.label}`)
+          .join("\n")}`;
 
   return {
     messages: [
@@ -125,7 +133,7 @@ export function buildMovePrompt(
         content:
           `Players: White is "${names.white}", Black is "${names.black}".\n` +
           `Write between ${targets.min} and ${targets.max} moves.${mapping}\n\n` +
-          `Dialogue lines:\n${transcriptLines(segments, speakers)}`,
+          `Dialogue lines:\n${transcriptLines(segments, speakers)}${soundLines}`,
       },
     ],
     schema: moveSchema(targets),

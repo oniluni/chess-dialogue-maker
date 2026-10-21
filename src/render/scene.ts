@@ -323,8 +323,11 @@ export function createScene(
     let current: (typeof events)[number] | undefined;
     let distance = Number.POSITIVE_INFINITY;
     for (const event of events) {
+      if (event.source === "model" && !event.reliable) continue;
+      const endsAt = Math.min(event.end ?? event.at, event.at + 3);
+      if (time < event.at - 0.25 || time > endsAt) continue;
       const next = Math.abs(event.at - time);
-      if (next <= 1.2 && next < distance) {
+      if (next < distance) {
         distance = next;
         current = event;
       }
@@ -436,4 +439,5 @@ export function createScene(
     },
   };
 }
+
 

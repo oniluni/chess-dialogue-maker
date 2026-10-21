@@ -1,5 +1,6 @@
-﻿import type { LlmModelInfo, LlmProviderInfo } from "../../shared/llm.ts";
+import type { LlmModelInfo, LlmProviderInfo } from "../../shared/llm.ts";
 import { analyzeDialogue, extraAttempt } from "../analysis/analyze.ts";
+import { getSoundEvents } from "../analysis/sound-events.ts";
 import type { Move } from "../analysis/move.ts";
 import { transcribeWav, transcriptionInfo } from "../analysis/transcribe.ts";
 import { parseTranscript } from "../analysis/transcript.ts";
@@ -253,6 +254,7 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
         model: choice.model,
         duration,
         speakers: speakers.context(),
+        sounds: soundContext(),
         onAttempt: (attempt, total) => setStatus(`Asking the model (attempt ${attempt} of ${total})â€¦`),
       });
       if (disposed) return;
@@ -281,6 +283,12 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
     }
   }
 
+  /** Reliable sound events, as the prompt sees them: "what happens when". */
+  function soundContext(): Array<{ start: number; label: string }> {
+    return getSoundEvents()
+      .filter((event) => event.source === "user" || event.reliable)
+      .map((event) => ({ start: event.at, label: event.label.trim() === "" ? event.kind : event.label }));
+  }
   function showRecovery(
     attempts: Parameters<typeof createRecoveryPanel>[0],
     segments: Parameters<typeof createRecoveryPanel>[1],
@@ -314,6 +322,7 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
                 model: choice.model,
                 duration,
                 speakers: speakers.context(),
+                sounds: soundContext(),
               },
               last,
             );
@@ -370,4 +379,5 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
     },
   };
 }
+
 
