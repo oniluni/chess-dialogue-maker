@@ -1,4 +1,6 @@
 import type { Move } from "./analysis/move.ts";
+import { DEFAULT_SCHEDULE_OPTIONS } from "./analysis/schedule.ts";
+import type { ScheduleOptions } from "./analysis/schedule.ts";
 import { openMedia } from "./media/probe.ts";
 import type { OpenedMedia } from "./media/probe.ts";
 import { clampRange } from "./media/range.ts";
@@ -14,6 +16,15 @@ export interface Clip {
 
 let clip: Clip | null = null;
 let moves: Move[] = [];
+let scheduleOptions: ScheduleOptions = { ...DEFAULT_SCHEDULE_OPTIONS };
+
+export function getScheduleOptions(): ScheduleOptions {
+  return scheduleOptions;
+}
+
+export function setScheduleOptions(patch: Partial<ScheduleOptions>): void {
+  scheduleOptions = { ...scheduleOptions, ...patch };
+}
 
 export function getClip(): Clip | null {
   return clip;

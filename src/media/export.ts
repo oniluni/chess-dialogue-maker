@@ -10,14 +10,15 @@ import {
 } from "mediabunny";
 import type { InputAudioTrack, InputVideoTrack } from "mediabunny";
 
-import type { TimeRange } from "./range.ts";
+import { FRAME_RATE } from "../analysis/schedule.ts";
+import type { Schedule } from "../analysis/schedule.ts";
 
 export interface ExportRequest {
   video: InputVideoTrack;
   audio: InputAudioTrack | null;
   width: number;
   height: number;
-  range: TimeRange;
+  schedule: Schedule;
   onProgress?: (fraction: number) => void;
 }
 
@@ -43,16 +44,25 @@ function sliceAudio(buffer: AudioBuffer, from: number, to: number): AudioBuffer 
   return slice;
 }
 
+/** Silence of the same shape as the decoded audio, for the frozen stretches. */
+function silentBuffer(seconds: number, channels: number, sampleRate: number): AudioBuffer {
+  return new AudioBuffer({
+    numberOfChannels: channels,
+    length: Math.max(1, Math.round(seconds * sampleRate)),
+    sampleRate,
+  });
+}
+
 /**
- * Re-encodes one range into an MP4: decode frame by frame, draw it onto one
- * canvas, encode. The canvas is the single place overlays will be drawn later.
+ * Renders the schedule into an MP4: every play segment is decoded and re-encoded frame by
+ * frame, every pause holds one frame for its duration, and the audio gets silence there.
+ * The single canvas is also where the move card will be drawn.
  */
 export async function exportMp4(request: ExportRequest): Promise<Blob> {
   const width = evenDimension(request.width);
   const height = evenDimension(request.height);
-  const { start, end } = request.range;
-  const duration = end - start;
-  if (!(duration > 0)) throw new Error("the export range is empty");
+  const total = request.schedule.duration;
+  if (!(total > 0)) throw new Error("the export is empty");
 
   const canvas = new OffscreenCanvas(width, height);
   const context = canvas.getContext("2d");
@@ -70,21 +80,49 @@ export async function exportMp4(request: ExportRequest): Promise<Blob> {
 
   await output.start();
   try {
-    for await (const frame of frames.canvases(start, end)) {
-      const from = Math.max(frame.timestamp, start);
-      const to = Math.min(frame.timestamp + frame.duration, end);
-      if (to <= from) continue;
-      context.drawImage(frame.canvas, 0, 0, width, height);
-      await videoSource.add(from - start, to - from);
-      request.onProgress?.(Math.min(0.95, (from - start) / duration));
+    let outTime = 0;
+    for (const segment of request.schedule.segments) {
+      if (segment.kind === "play") {
+        for await (const frame of frames.canvases(segment.start, segment.end)) {
+          const from = Math.max(frame.timestamp, segment.start);
+          const to = Math.min(frame.timestamp + frame.duration, segment.end);
+          if (to <= from) continue;
+          context.drawImage(frame.canvas, 0, 0, width, height);
+          await videoSource.add(outTime, to - from);
+          outTime += to - from;
+          request.onProgress?.(Math.min(0.95, outTime / total));
+        }
+        continue;
+      }
+
+      const still = await frames.getCanvas(segment.at);
+      const count = Math.max(1, Math.round(segment.duration * FRAME_RATE));
+      for (let index = 0; index < count; index += 1) {
+        if (still !== null) context.drawImage(still.canvas, 0, 0, width, height);
+        await videoSource.add(outTime, 1 / FRAME_RATE);
+        outTime += 1 / FRAME_RATE;
+        request.onProgress?.(Math.min(0.95, outTime / total));
+      }
     }
 
     if (audioSource !== null && request.audio !== null) {
-      for await (const chunk of new AudioBufferSink(request.audio).buffers(start, end)) {
-        const from = Math.max(chunk.timestamp, start);
-        const to = Math.min(chunk.timestamp + chunk.buffer.duration, end);
-        if (to <= from) continue;
-        await audioSource.add(sliceAudio(chunk.buffer, from - chunk.timestamp, to - chunk.timestamp));
+      const audioSink = new AudioBufferSink(request.audio);
+      let channels = 2;
+      let sampleRate = 48_000;
+      for (const segment of request.schedule.segments) {
+        if (segment.kind === "pause") {
+          await audioSource.add(silentBuffer(segment.duration, channels, sampleRate));
+          continue;
+        }
+        for await (const chunk of audioSink.buffers(segment.start, segment.end)) {
+          const buffer = chunk.buffer;
+          channels = buffer.numberOfChannels;
+          sampleRate = buffer.sampleRate;
+          const from = Math.max(chunk.timestamp, segment.start);
+          const to = Math.min(chunk.timestamp + buffer.duration, segment.end);
+          if (to <= from) continue;
+          await audioSource.add(sliceAudio(buffer, from - chunk.timestamp, to - chunk.timestamp));
+        }
       }
     }
 
