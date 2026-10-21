@@ -1,5 +1,7 @@
+import { cropAvatar } from "../analysis/avatar.ts";
 import { detectPeople } from "../analysis/vision.ts";
 import type { Side } from "../analysis/move.ts";
+import { setAvatars } from "../render/avatar-store.ts";
 import { getCast, getClip, getNames, getPeople, setCast, setNames, setPeople } from "../session.ts";
 import type { CastEntry } from "../session.ts";
 import { el } from "../ui/dom.ts";
@@ -11,7 +13,7 @@ export interface CastPanel {
 }
 
 /** Finds the people in the clip and gives them names and sides. */
-export function createCastPanel(): CastPanel {
+export function createCastPanel(options: { onAvatars: () => void }): CastPanel {
   let busy = false;
 
   const findButton = el("button", { class: "button", text: "Find people", attrs: { type: "button" } });
@@ -107,6 +109,20 @@ export function createCastPanel(): CastPanel {
             })),
           );
           setStatus(`${result.persons.length} ${result.persons.length === 1 ? "person" : "people"} found.`);
+
+          const urls: Partial<Record<Side, string | null>> = {};
+          for (const person of result.persons.slice(0, 2)) {
+            const side: Side = person.id === 0 ? "white" : "black";
+            try {
+              urls[side] = await cropAvatar(clip.file, person.preview.time, person.preview);
+            } catch (error) {
+              console.warn("avatar crop failed:", error);
+            }
+          }
+          if (Object.keys(urls).length > 0) {
+            setAvatars(urls);
+            options.onAvatars();
+          }
         }
       } catch (error) {
         setStatus(messageOf(error));

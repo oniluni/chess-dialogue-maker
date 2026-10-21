@@ -3,6 +3,8 @@ import type { Schedule } from "../analysis/schedule.ts";
 import { SoundBoard } from "../audio/player.ts";
 import { exportMp4 } from "../media/export.ts";
 import { createScene } from "../render/scene.ts";
+import { loadSceneAvatars } from "../render/avatar.ts";
+import { clearAvatars } from "../render/avatar-store.ts";
 import {
   getClip,
   getMoves,
@@ -75,7 +77,11 @@ export function renderCreatePage(): Page {
     },
   });
 
-  const cast = createCastPanel();
+  const cast = createCastPanel({
+    onAvatars: () => {
+      rebuildScene();
+    },
+  });
 
   const playButton = el("button", {
     class: "button",
@@ -177,10 +183,13 @@ export function renderCreatePage(): Page {
   }
 
   function rebuildScene(): void {
-    scene = createScene(getMoves(), getNames());
-    canvas.width = scene.width;
-    canvas.height = scene.height;
-    preview.draw();
+    void (async (): Promise<void> => {
+      const avatars = await loadSceneAvatars();
+      scene = createScene(getMoves(), getNames(), avatars);
+      canvas.width = scene.width;
+      canvas.height = scene.height;
+      preview.draw();
+    })();
   }
 
   function showClip(next: Clip): void {
@@ -221,6 +230,7 @@ export function renderCreatePage(): Page {
   }
 
   async function openFile(file: File, trim: Trim | null = null): Promise<void> {
+    clearAvatars();
     setStatus(`Opening ${file.name}…`);
     try {
       const opened = await openClip(file);

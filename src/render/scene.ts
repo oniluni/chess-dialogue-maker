@@ -1,6 +1,7 @@
 import { formatEval, MOVE_COLORS, MOVE_GLYPHS } from "../analysis/move.ts";
 import type { Move } from "../analysis/move.ts";
 import type { Names } from "../names.ts";
+import type { SceneAvatars } from "./avatar.ts";
 import type { FrameState } from "./state.ts";
 import { ellipsize, setFont, wrapLines } from "./text.ts";
 
@@ -293,25 +294,35 @@ function drawPlayer(
   side: string,
   top: number,
   left: boolean,
+  avatar: ImageBitmap | null = null,
 ): void {
   const avatarY = top + (PLAYERS_H - AVATAR_SIZE) / 2;
   const avatarX = left ? PLAYERS_PAD : WIDTH - PLAYERS_PAD - AVATAR_SIZE;
   const centreX = avatarX + AVATAR_SIZE / 2;
   const centreY = avatarY + AVATAR_SIZE / 2;
 
+  ctx.save();
   ctx.beginPath();
   ctx.arc(centreX, centreY, AVATAR_SIZE / 2 - 2, 0, Math.PI * 2);
+  ctx.clip();
   ctx.fillStyle = AVATAR_BG;
-  ctx.fill();
+  ctx.fillRect(avatarX, avatarY, AVATAR_SIZE, AVATAR_SIZE);
+  if (avatar !== null) {
+    ctx.drawImage(avatar, avatarX, avatarY, AVATAR_SIZE, AVATAR_SIZE);
+  } else {
+    setFont(ctx, 700, AVATAR_SIZE * 0.42);
+    ctx.fillStyle = TEXT;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(initials(name), centreX, centreY + 1);
+  }
+  ctx.restore();
+
+  ctx.beginPath();
+  ctx.arc(centreX, centreY, AVATAR_SIZE / 2 - 2, 0, Math.PI * 2);
   ctx.lineWidth = 2;
   ctx.strokeStyle = RING;
   ctx.stroke();
-
-  setFont(ctx, 700, AVATAR_SIZE * 0.42);
-  ctx.fillStyle = TEXT;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(initials(name), centreX, centreY + 1);
 
   const maxNameWidth = WIDTH / 2 - AVATAR_SIZE - PLAYERS_PAD - 48;
   const nameSize = fittedSize(ctx, name, 700, NAME_SIZE, maxNameWidth);
@@ -359,7 +370,7 @@ function drawEval(
   }
 }
 
-export function createScene(moves: Move[], names: Names): Scene {
+export function createScene(moves: Move[], names: Names, avatars: SceneAvatars | null = null): Scene {
   const measure = new OffscreenCanvas(1, 1).getContext("2d");
   if (measure === null) throw new Error("the browser did not provide a 2D context for the card");
 
@@ -407,8 +418,8 @@ export function createScene(moves: Move[], names: Names): Scene {
 
       ctx.fillStyle = PLAYERS_BG;
       ctx.fillRect(0, playersTop, WIDTH, PLAYERS_H);
-      drawPlayer(ctx, names.white, "White", playersTop, true);
-      drawPlayer(ctx, names.black, "Black", playersTop, false);
+      drawPlayer(ctx, names.white, "White", playersTop, true, avatars?.white ?? null);
+      drawPlayer(ctx, names.black, "Black", playersTop, false, avatars?.black ?? null);
       drawEval(ctx, state.evalScore, evalTop);
       ctx.restore();
     },
