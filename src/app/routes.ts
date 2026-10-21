@@ -7,11 +7,11 @@ export interface Route {
 }
 
 export const ROUTES: readonly Route[] = [
-  { id: "create", label: "Создание видео", hint: "Источник, обрезка, разбор и сборка." },
-  { id: "moves", label: "Ходы", hint: "Правка карточек разбора." },
-  { id: "manual", label: "Ручной разбор", hint: "Реплики, оценки и ключевые моменты." },
-  { id: "sounds", label: "Звуки", hint: "События и подача речи." },
-  { id: "style", label: "Стиль видео", hint: "Цвета, шрифты и раскладка." },
+  { id: "create", label: "Create video", hint: "Source, trim, analysis and render." },
+  { id: "moves", label: "Moves", hint: "Edit the move cards." },
+  { id: "manual", label: "Manual analysis", hint: "Lines, ratings and key moments." },
+  { id: "sounds", label: "Sounds", hint: "Events and speech delivery." },
+  { id: "style", label: "Style", hint: "Colours, fonts and layout." },
 ];
 
 export const DEFAULT_ROUTE: RouteId = "create";

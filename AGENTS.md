@@ -23,7 +23,8 @@ Node 26 runs the `.ts` files directly, so every import keeps its explicit `.ts` 
 | `index.html` | Vite entry |
 
 `src/main.ts` mounts the shell (`app/shell.ts`), starts the hash router (`app/router.ts`)
-and health polling (`api.ts`). Pages live in `ui/pages.ts` and are added one by one.
+and health polling (`api.ts`). Pages live in `pages/` — one module each, and `dispose()`
+releases its media — while decoding, encoding and probing sit in `media/`.
 
 ## Rules
 
@@ -103,9 +104,9 @@ a native model — downloads, speech, inference — because a page cannot load t
 
 ## UI
 
-No framework: components, state and routing are hand-rolled and typed. Split pages by
-feature and keep each builder small. `el()` in `ui/dom.ts` builds nodes; user text never
-goes through `innerHTML`.
+No framework: components, state and routing are hand-rolled and typed. UI copy is English.
+Split pages by feature and keep each builder small. `el()` in `ui/dom.ts` builds nodes; user
+text never goes through `innerHTML`.
 
 State is one `AppState` in `src/state.ts` with `get`/`set`/`subscribe`; a subscriber
 re-renders only the part it owns. Routes are `#/<id>` hashes listed in `app/routes.ts`.
