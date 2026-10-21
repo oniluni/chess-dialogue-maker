@@ -1,12 +1,13 @@
 ﻿import { spawn, spawnSync } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { mkdir, readdir, rm, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import type { DownloadStatus } from "../shared/download.ts";
 import { SECTION_MARGIN } from "../shared/download.ts";
-import { cacheHit, cookiesFile, readCache, writeCache } from "./download-cache.ts";
+import { appendCacheEntry, cacheHit, cachedPath, cookiesFile, readCache } from "./download-cache.ts";
 
 export interface DownloadRequest {
   url: string;
@@ -14,18 +15,60 @@ export interface DownloadRequest {
   end: number | null;
 }
 
+export interface DownloadOptions {
+  /** Cache root; tests point it at a temporary directory. */
+  root?: string;
+  /** Whole-job limit, including the full-video retry. */
+  timeoutMs?: number;
+}
+
+/** Raised when too many jobs are already queued or running. */
+export class DownloadLimitError extends Error {
+  constructor() {
+    super("Too many downloads are already running; wait for one to finish.");
+    this.name = "DownloadLimitError";
+  }
+}
+
 interface Job extends DownloadStatus {
   id: string;
   createdAt: number;
-  dir: string;
+  request: DownloadRequest;
+  cacheRoot: string;
+  /** Working directory of this job; `null` for a cache hit (the cached directory is not owned). */
+  dir: string | null;
+  /** Absolute path of the finished file, whichever directory holds it. */
+  path: string | null;
   name: string | null;
+  child: ChildProcess | null;
+  timeoutMs: number;
+  cancelled: boolean;
+  timedOut: boolean;
+  deleteRequested: boolean;
+  inUse: number;
+  finishedAt: number | null;
+}
+
+interface YtdlpRun {
+  code: number;
+  output: string;
+  timedOut: boolean;
 }
 
 const CACHE_DIR = join(import.meta.dirname, "..", ".cache", "downloads");
 const JOB_TTL = 60 * 60 * 1000;
+/** Finished jobs kept for the UI; active jobs are never evicted. */
 const MAX_JOBS = 16;
+/** yt-dlp processes that may run at the same time. */
+const MAX_CONCURRENT = 2;
+const MAX_QUEUED_OR_RUNNING = 16;
+const JOB_TIMEOUT = 10 * 60 * 1000;
+const KILL_GRACE = 5_000;
 
 const jobs = new Map<string, Job>();
+const queue: Job[] = [];
+let active = 0;
+let stopping = false;
 
 let ytdlpChecked: string | null = null;
 let nodeOnPath: boolean | null = null;
@@ -139,20 +182,74 @@ function parsePercent(line: string): number | null {
   return Number.isFinite(value) ? Math.min(0.99, value / 100) : null;
 }
 
-function spawnYtdlp(
+/** Kills yt-dlp and its ffmpeg children; yt-dlp may run them in its own process group. */
+function killTree(child: ChildProcess): void {
+  const pid = child.pid;
+  if (pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
+  if (process.platform === "win32") {
+    const killer = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
+      windowsHide: true,
+      stdio: "ignore",
+    });
+    killer.on("error", () => {
+      child.kill();
+    });
+    killer.unref();
+    return;
+  }
+
+  try {
+    process.kill(-pid, "SIGTERM");
+  } catch {
+    child.kill("SIGTERM");
+  }
+  const force = setTimeout(() => {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      child.kill("SIGKILL");
+    }
+  }, KILL_GRACE);
+  force.unref();
+}
+
+export function runYtdlp(
   bin: string,
   args: string[],
   onLine: (line: string) => void,
-): Promise<{ code: number; output: string }> {
-  return new Promise((resolve, reject) => {
+  timeoutMs: number,
+  maxOutput = 200_000,
+  onChild?: (child: ChildProcess | null) => void,
+): Promise<YtdlpRun> {
+  return new Promise((resolvePromise, reject) => {
     const command = scriptLike(bin) ? process.execPath : bin;
     const commandArgs = scriptLike(bin) ? [bin, ...args] : args;
-    const child = spawn(command, commandArgs, { windowsHide: true });
+    const child = spawn(command, commandArgs, {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32",
+    });
+    onChild?.(child);
     let output = "";
+    let timedOut = false;
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killTree(child);
+    }, Math.max(1_000, timeoutMs));
+
+    const finish = (callback: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      onChild?.(null);
+      callback();
+    };
 
     const handle = (text: string): void => {
       output += text;
-      if (output.length > 200_000) output = output.slice(-100_000);
+      if (output.length > maxOutput) output = output.slice(-Math.floor(maxOutput / 2));
       for (const line of text.split(/\r?\n|\r/)) {
         const clean = line.trim();
         if (clean !== "") onLine(clean);
@@ -163,8 +260,8 @@ function spawnYtdlp(
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", handle);
     child.stderr.on("data", handle);
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code: code ?? -1, output }));
+    child.on("error", (error) => finish(() => reject(error)));
+    child.on("close", (code) => finish(() => resolvePromise({ code: code ?? -1, output, timedOut })));
   });
 }
 
@@ -179,11 +276,32 @@ async function newestSource(dir: string): Promise<string | null> {
   return sized[0]?.name ?? null;
 }
 
-async function runJob(job: Job, request: DownloadRequest): Promise<void> {
-  let output = "";
+function removeDir(dir: string): void {
+  void rm(dir, { recursive: true, force: true }).catch((error: unknown) => {
+    console.warn("could not remove the download directory:", error);
+  });
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function failJob(job: Job, message: string): void {
+  if (job.cancelled) return;
+  job.state = "error";
+  job.message = message;
+  job.finishedAt = Date.now();
+}
+
+async function runJob(job: Job): Promise<void> {
+  const dir = job.dir;
+  if (dir === null) return;
+
   try {
     const bin = await resolveYtdlp();
-    const section = sectionArgs(request);
+    if (job.cancelled) return;
+
+    const section = sectionArgs(job.request);
     const args = [
       "--no-playlist",
       "--newline",
@@ -199,25 +317,39 @@ async function runJob(job: Job, request: DownloadRequest): Promise<void> {
       "--merge-output-format",
       "mp4",
       "-o",
-      join(job.dir, "source.%(ext)s"),
+      join(dir, "source.%(ext)s"),
       ...cookiesArgs(),
     ];
     if (hasNode()) args.push("--js-runtimes", "node");
     if (section !== null) args.push(...section.args);
-    args.push(request.url);
+    args.push(job.request.url);
 
+    const deadline = Date.now() + job.timeoutMs;
+    const remaining = (): number => Math.max(1_000, deadline - Date.now());
     job.message = "Starting the download…";
+    job.state = "running";
+
     const onLine = (line: string): void => {
-      output += `${line}\n`;
       const percent = parsePercent(line);
       if (percent !== null) {
         job.progress = percent;
         job.message = `Downloading ${Math.round(percent * 100)}%`;
       } else if (/\[Merger\]/.test(line)) {
         job.message = "Merging the audio and the video…";
+      } else if (/^\[download\] Destination:/.test(line)) {
+        job.message = "Downloading…";
       }
     };
-    const result = await spawnYtdlp(bin, args, onLine);
+
+    const result = await runYtdlp(bin, args, onLine, remaining(), 200_000, (child) => {
+      job.child = child;
+    });
+    if (job.cancelled) return;
+    if (result.timedOut) {
+      job.timedOut = true;
+      failJob(job, "The download timed out.");
+      return;
+    }
 
     let code = result.code;
     if (code !== 0 && section !== null) {
@@ -225,65 +357,173 @@ async function runJob(job: Job, request: DownloadRequest): Promise<void> {
       job.message = "The fragment is unavailable; downloading the whole video…";
       job.progress = 0;
       const retry = args.filter((arg) => !section.args.includes(arg));
-      const again = await spawnYtdlp(bin, retry, onLine);
+      const again = await runYtdlp(bin, retry, onLine, remaining(), 200_000, (child) => {
+        job.child = child;
+      });
+      if (job.cancelled) return;
+      if (again.timedOut) {
+        job.timedOut = true;
+        failJob(job, "The download timed out.");
+        return;
+      }
       code = again.code;
       if (code !== 0) {
-        job.state = "error";
-        job.message = classify(again.output);
+        failJob(job, classify(again.output));
         return;
       }
     } else if (code !== 0) {
-      job.state = "error";
-      job.message = classify(result.output);
+      failJob(job, classify(result.output));
       return;
     }
 
-    const name = await newestSource(job.dir);
+    const name = await newestSource(dir);
+    if (job.cancelled) return;
     if (name === null) {
-      job.state = "error";
-      job.message = "yt-dlp finished but wrote no video file.";
+      failJob(job, "yt-dlp finished but wrote no video file.");
       return;
     }
 
-    const info = await stat(join(job.dir, name));
+    const path = join(dir, name);
+    const info = await stat(path);
+    if (job.cancelled) return;
     job.name = name;
+    job.path = path;
     job.file = { name, size: info.size };
-    const entries = await readCache(CACHE_DIR);
-    entries.push({
-      url: request.url,
-      start: request.start,
-      end: request.end,
-      dir: job.dir,
-      name,
-      size: info.size,
-    });
-    await writeCache(CACHE_DIR, entries);
+    try {
+      await appendCacheEntry(job.cacheRoot, {
+        url: job.request.url,
+        start: job.request.start,
+        end: job.request.end,
+        dir,
+        name,
+        size: info.size,
+      });
+    } catch (error) {
+      // The video is complete; a broken cache index only costs a re-download next time.
+      console.warn("could not record the download cache:", error);
+    }
+    if (job.cancelled) return;
     job.progress = 1;
     job.state = "done";
     job.message = "Ready";
+    job.finishedAt = Date.now();
   } catch (error) {
-    job.state = "error";
-    job.message = error instanceof Error ? error.message : String(error);
+    if (job.cancelled) return;
+    const message = job.timedOut ? "The download timed out." : classify(errorMessage(error));
+    failJob(job, message);
     console.warn("download failed:", error);
+  } finally {
+    job.child = null;
   }
+}
+
+function pump(): void {
+  if (stopping) return;
+  while (active < MAX_CONCURRENT) {
+    const job = queue.shift();
+    if (job === undefined) break;
+    if (job.cancelled || jobs.get(job.id) !== job) continue;
+    active += 1;
+    void runJob(job)
+      .catch((error: unknown) => {
+        failJob(job, classify(errorMessage(error)));
+        console.warn("download crashed:", error);
+      })
+      .finally(() => {
+        active -= 1;
+        if (job.finishedAt === null) job.finishedAt = Date.now();
+        pump();
+        cleanup();
+      });
+  }
+}
+
+function pathShared(job: Job): boolean {
+  if (job.path === null) return false;
+  for (const other of jobs.values()) {
+    if (other !== job && other.path === job.path) return true;
+  }
+  return false;
 }
 
 function cleanup(): void {
   const now = Date.now();
   for (const [id, job] of jobs) {
-    if (now - job.createdAt < JOB_TTL) continue;
-    jobs.delete(id);
-    void rm(job.dir, { recursive: true, force: true });
+    if (job.state === "running" || job.inUse > 0 || pathShared(job)) continue;
+    if (job.finishedAt !== null && now - job.finishedAt >= JOB_TTL) {
+      jobs.delete(id);
+      discardJob(job);
+    }
   }
-  if (jobs.size <= MAX_JOBS) return;
-  const oldest = [...jobs.values()].sort((left, right) => left.createdAt - right.createdAt);
-  for (const job of oldest.slice(0, jobs.size - MAX_JOBS)) {
+
+  const excess = jobs.size - MAX_JOBS;
+  if (excess <= 0) return;
+  const removable = [...jobs.values()]
+    .filter((job) => job.state !== "running" && job.inUse === 0 && !pathShared(job))
+    .sort((left, right) => left.createdAt - right.createdAt);
+  for (const job of removable.slice(0, excess)) {
     jobs.delete(job.id);
-    void rm(job.dir, { recursive: true, force: true });
+    discardJob(job);
   }
 }
 
-export function startDownload(request: DownloadRequest): string {
+/** Stops the child and frees the directory; a cache-hit job does not own the cached directory. */
+function discardJob(job: Job): void {
+  job.cancelled = true;
+  const dir = job.dir;
+  job.dir = null;
+  if (job.child !== null) {
+    const child = job.child;
+    killTree(child);
+    if (dir !== null) child.once("close", () => removeDir(dir));
+    return;
+  }
+  if (dir !== null) removeDir(dir);
+}
+
+async function prepare(job: Job): Promise<void> {
+  try {
+    const hit = cacheHit(await readCache(job.cacheRoot), job.request.url, job.request.start, job.request.end);
+    if (job.cancelled) return;
+    if (hit !== null) {
+      const path = cachedPath(hit);
+      try {
+        const info = await stat(path);
+        if (job.cancelled) return;
+        job.name = hit.name;
+        job.path = path;
+        job.file = { name: hit.name, size: info.size };
+        // The cached directory belongs to an older job (or to the cache itself); this job
+        // must never remove it.
+        job.dir = null;
+        job.progress = 1;
+        job.state = "done";
+        job.message = "Ready (already downloaded)";
+        job.finishedAt = Date.now();
+        cleanup();
+        return;
+      } catch {
+        // The index is stale: the file disappeared, so download it again.
+      }
+    }
+
+    const dir = job.dir;
+    if (dir === null) return;
+    await mkdir(dir, { recursive: true });
+    if (job.cancelled) {
+      removeDir(dir);
+      return;
+    }
+    job.message = "Waiting for another download to finish…";
+    queue.push(job);
+    pump();
+  } catch (error) {
+    failJob(job, errorMessage(error));
+    console.warn("download could not start:", error);
+  }
+}
+
+export function startDownload(request: DownloadRequest, options: DownloadOptions = {}): string {
   const url = request.url.trim();
   if (!validUrl(url)) throw new Error("Paste a link that starts with http:// or https://");
   if (request.start !== null && request.end !== null && request.end <= request.start) {
@@ -291,36 +531,37 @@ export function startDownload(request: DownloadRequest): string {
   }
 
   cleanup();
+  const pending = [...jobs.values()].filter((job) => job.state === "running").length;
+  if (pending >= MAX_QUEUED_OR_RUNNING) throw new DownloadLimitError();
+
   const id = randomUUID();
-  const dir = join(CACHE_DIR, id);
+  const cacheRoot = resolve(options.root ?? CACHE_DIR);
+  const timeoutMs =
+    options.timeoutMs !== undefined && Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
+      ? options.timeoutMs
+      : JOB_TIMEOUT;
   const job: Job = {
     id,
     createdAt: Date.now(),
-    dir,
+    request: { url, start: request.start, end: request.end },
+    cacheRoot,
+    dir: join(cacheRoot, id),
+    path: null,
     name: null,
     state: "running",
     progress: 0,
     message: "Preparing…",
     file: null,
+    child: null,
+    timeoutMs,
+    cancelled: false,
+    timedOut: false,
+    deleteRequested: false,
+    inUse: 0,
+    finishedAt: null,
   };
   jobs.set(id, job);
-  void mkdir(dir, { recursive: true })
-    .then(async () => {
-      const hit = cacheHit(await readCache(CACHE_DIR), url, request.start, request.end);
-      if (hit !== null) {
-        job.name = hit.name;
-        job.file = { name: hit.name, size: hit.size };
-        job.progress = 1;
-        job.state = "done";
-        job.message = "Ready (already downloaded)";
-        return;
-      }
-      await runJob(job, { url, start: request.start, end: request.end });
-    })
-    .catch((error: unknown) => {
-      job.state = "error";
-      job.message = error instanceof Error ? error.message : String(error);
-    });
+  void prepare(job);
   return id;
 }
 
@@ -332,30 +573,62 @@ export function statusOf(id: string): DownloadStatus | null {
 
 export function fileOf(id: string): { path: string; name: string; size: number } | null {
   const job = jobs.get(id);
-  if (job === undefined || job.state !== "done" || job.name === null) return null;
-  return { path: join(job.dir, job.name), name: job.name, size: job.file?.size ?? 0 };
+  if (job === undefined || job.state !== "done" || job.path === null || job.name === null) return null;
+  return { path: job.path, name: job.name, size: job.file?.size ?? 0 };
 }
 
+/** Marks a file as being streamed, so cleanup cannot delete its directory under the reader. */
+export function retainFile(id: string): boolean {
+  const job = jobs.get(id);
+  if (job === undefined || job.state !== "done" || job.path === null) return false;
+  job.inUse += 1;
+  return true;
+}
+
+export function releaseFile(id: string): void {
+  const job = jobs.get(id);
+  if (job === undefined) return;
+  job.inUse = Math.max(0, job.inUse - 1);
+  if (job.inUse === 0 && job.deleteRequested) {
+    jobs.delete(id);
+    discardJob(job);
+  }
+}
 
 export function removeJob(id: string): void {
   const job = jobs.get(id);
   if (job === undefined) return;
+  if (job.inUse > 0) {
+    job.deleteRequested = true;
+    job.cancelled = true;
+    return;
+  }
   jobs.delete(id);
-  void rm(job.dir, { recursive: true, force: true });
+  discardJob(job);
 }
 
-
+/** Kills every yt-dlp process; called when the backend shuts down. */
+export function stopDownloads(): void {
+  stopping = true;
+  queue.length = 0;
+  for (const job of jobs.values()) {
+    job.cancelled = true;
+    if (job.child !== null) killTree(job.child);
+  }
+  jobs.clear();
+}
 
 export async function ytdlpVersion(): Promise<string> {
   const bin = await resolveYtdlp();
-  const result = await spawnYtdlp(bin, ["--version"], () => undefined);
+  const result = await runYtdlp(bin, ["--version"], () => undefined, 15_000);
+  if (result.timedOut) throw new Error("yt-dlp did not answer in time");
   return result.output.trim().split(/\r?\n/)[0] ?? "";
 }
 
 export async function updateYtdlp(): Promise<string> {
   const bin = await resolveYtdlp();
-  const result = await spawnYtdlp(bin, ["-U"], () => undefined);
+  const result = await runYtdlp(bin, ["-U"], () => undefined, 120_000);
+  if (result.timedOut) throw new Error("the yt-dlp update timed out");
   if (result.code !== 0) throw new Error(classify(result.output));
   return result.output.trim();
 }
-

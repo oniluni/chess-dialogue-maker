@@ -54,11 +54,13 @@ the video is not stretched: `cropRect()` picks a source rectangle around the det
 | `server/vision.ts` | YuNet detection, 5-point alignment, SFace embeddings, person clustering |
 | `server/yamnet.ts` | YAMNet scores per 0.48 s frame, class prefixes, thresholds, music moods |
 | `server/prosody.ts` | RMS loudness, median F0, syllable rate, robust z-score per voice, pauses |
-| `server/download.ts` | yt-dlp jobs, sections, cookies, cache, full-video fallback, update |
+| `server/download.ts` | yt-dlp jobs: two at a time, sections, cookies, cache, full-video fallback, timeout, cancellation, update |
 | `server/search.ts` | YouTube search through yt-dlp |
 | `server/projects.ts` | project folders under `.cache/projects` |
 
-models are downloaded on first use into `.cache/` and never committed.
+The backend binds `127.0.0.1` and accepts an API request only when its `Host` and `Origin` are loopback names and its fetch metadata is not cross-site. State-changing JSON routes require `application/json`; the audio routes require a WAV content type. This blocks cross-site request forgery and DNS rebinding, not authentication: any local process can still call the API. Request bodies are capped, and WAV input and RGB frames are validated before a model runs.
+
+models are downloaded on first use into `.cache/` and never committed. The face and voice models are written atomically over HTTPS; no checksum is pinned.
 
 ## API
 
@@ -82,6 +84,8 @@ models are downloaded on first use into `.cache/` and never committed.
 | `/api/download/update` | POST | — |
 | `/api/projects` | GET / POST / DELETE | JSON document |
 
+The audio routes accept 16 kHz mono PCM16 WAV; the parser caps audio at 30 minutes, and the JSON base64 routes have lower body caps. `/api/faces` accepts at most 80 frames, each at most 2048 px per side and 1 megapixel, and 12 megapixels together. Download jobs run two at a time and are stopped after ten minutes; finished jobs are served from `.cache/downloads`.
+
 ## storage
 
 | path | contents |
@@ -90,6 +94,6 @@ models are downloaded on first use into `.cache/` and never committed.
 | `.cache/models` | WeSpeaker, YuNet, SFace, YAMNet + class map |
 | `.cache/downloads` | yt-dlp jobs and `index.json` (source cache) |
 | `.cache/projects` | one folder per saved project |
-| `.cache/yt-cookies.txt` | cookies saved from the UI |
+| `.cache/yt-cookies.txt` | cookies saved from the UI (owner-only on POSIX) |
 
 all of `.cache/` is gitignored.

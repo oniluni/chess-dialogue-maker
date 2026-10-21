@@ -10,9 +10,13 @@ import { reloadPage } from "../app/router.ts";
 import { el } from "../ui/dom.ts";
 import { messageOf } from "../ui/text.ts";
 
+function savedAtText(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
 /** Saves and restores the document (moves, transcript, cast, sounds, options); the clip is re-opened by hand. */
-export function createProjectsPanel(): HTMLElement {
-  const nameInput = el("input", {
+export function createProjectsPanel(): HTMLElement {  const nameInput = el("input", {
     class: "text-input",
     attrs: { type: "text", placeholder: "project name", "aria-label": "Project name" },
   });
@@ -76,7 +80,7 @@ export function createProjectsPanel(): HTMLElement {
           class: "move-row",
           children: [
             el("span", { class: "move-title", text: project.name }),
-            el("span", { class: "meta", text: new Date(project.savedAt).toLocaleString() }),
+            el("span", { class: "meta", text: savedAtText(project.savedAt) }),
             open,
             remove,
           ],

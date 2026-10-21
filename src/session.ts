@@ -1,6 +1,7 @@
 ﻿import type { AnalysisAttempt } from "./analysis/analyze.ts";
 import type { Dialogue } from "./analysis/dialogue.ts";
 import type { Move, Side } from "./analysis/move.ts";
+import { setSoundEvents } from "./analysis/sound-events.ts";
 import type { SpeakerHint } from "../shared/speakers.ts";
 import type { FacesResult } from "../shared/people.ts";
 import { DEFAULT_SCHEDULE_OPTIONS } from "./analysis/schedule.ts";
@@ -132,6 +133,8 @@ export function setTranscript(next: TranscriptSegment[]): void {
   speakerHints = null;
   people = null;
   cast = [];
+  recovery = null;
+  dialogue = null;
 }
 
 export function getClip(): Clip | null {
@@ -150,6 +153,11 @@ export function setMoves(next: Move[], options: { keepBackup?: boolean } = {}): 
 /** The analysis as it was before the first hand edit; `null` until a list arrives. */
 export function getMovesBackup(): Move[] | null {
   return movesBackup === null ? null : movesBackup.map((move) => ({ ...move }));
+}
+
+/** A project load starts a new document; the previous analysis is not a valid restore target. */
+export function clearMovesBackup(): void {
+  movesBackup = null;
 }
 
 export function restoreMovesBackup(): boolean {
@@ -190,5 +198,6 @@ export function closeClip(): void {
   speakerHints = null;
   people = null;
   cast = [];
+  setSoundEvents([]);
 }
 

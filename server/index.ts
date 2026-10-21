@@ -6,6 +6,7 @@ import { existsSync } from "node:fs";
 
 import { handleApi, sendJson, sendText } from "./api.ts";
 import { DIST_DIR, HOST, PORT } from "./config.ts";
+import { stopDownloads } from "./download.ts";
 import { serveStatic } from "./static.ts";
 
 async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -46,6 +47,7 @@ server.listen(PORT, HOST, () => {
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
+    stopDownloads();
     server.closeAllConnections();
     server.close(() => process.exit(0));
   });

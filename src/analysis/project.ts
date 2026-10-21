@@ -1,14 +1,8 @@
-﻿import type { FacesResult } from "../../shared/people.ts";
-import type { LlmChoice } from "../session.ts";
-import type { Move, Side } from "../analysis/move.ts";
-import type { ScheduleOptions } from "../analysis/schedule.ts";
-import { getSoundEvents, setSoundEvents } from "../analysis/sound-events.ts";
-import type { SoundEvent } from "../analysis/sound-events.ts";
-import type { TranscriptSegment } from "../analysis/transcript.ts";
-import type { Names } from "../names.ts";
-import { getAvatars, setAvatars } from "../render/avatar-store.ts";
+﻿import { getAvatars, setAvatars } from "../render/avatar-store.ts";
 import { getStyle, setStyle } from "../render/style.ts";
+import { getSoundEvents, setSoundEvents } from "../analysis/sound-events.ts";
 import {
+  clearMovesBackup,
   getCast,
   getLlmChoice,
   getMoves,
@@ -18,35 +12,35 @@ import {
   getSpeakerHints,
   getTranscript,
   setCast,
+  setDialogue,
   setLlmChoice,
   setMoves,
   setNames,
   setPeople,
+  setRecovery,
   setScheduleOptions,
   setSpeakerHints,
   setTranscript,
 } from "../session.ts";
-import type { CastEntry, SpeakerHints } from "../session.ts";
+import { isRecord, errorMessage } from "../net/http.ts";
+import { parseProjectData } from "./project-format.ts";
+import type { ProjectData } from "./project-format.ts";
 
-export interface ProjectData {
-  version: 1;
-  moves: Move[];
-  transcript: TranscriptSegment[];
-  names: Names;
-  options: ScheduleOptions;
-  speakers: SpeakerHints | null;
-  people: FacesResult | null;
-  cast: CastEntry[];
-  avatars: Record<Side, string | null>;
-  sounds: SoundEvent[];
-  styleId: string;
-  llm: LlmChoice;
-}
+export type { ProjectData } from "./project-format.ts";
 
 export interface ProjectSummary {
   id: string;
   name: string;
   savedAt: string;
+}
+
+function summaryOf(value: unknown): ProjectSummary | null {
+  if (!isRecord(value)) return null;
+  const id = value["id"];
+  const name = value["name"];
+  const savedAt = value["savedAt"];
+  if (typeof id !== "string" || typeof name !== "string" || typeof savedAt !== "string") return null;
+  return { id, name, savedAt };
 }
 
 /** Everything the document holds; the clip itself is re-opened by hand. */
@@ -67,10 +61,13 @@ export function projectData(): ProjectData {
   };
 }
 
-export function applyProject(data: ProjectData): void {
+/** Replaces the document in one visible step, after the whole project has been validated. */
+export function applyProject(value: unknown): void {
+  const data = parseProjectData(value);
   setTranscript(data.transcript);
   setSpeakerHints(data.speakers);
   setMoves(data.moves);
+  clearMovesBackup();
   setNames(data.names);
   setScheduleOptions(data.options);
   setPeople(data.people);
@@ -79,6 +76,8 @@ export function applyProject(data: ProjectData): void {
   setSoundEvents(data.sounds);
   setStyle(data.styleId);
   setLlmChoice(data.llm);
+  setRecovery(null);
+  setDialogue(null);
 }
 
 export async function saveProjectOnServer(name: string): Promise<ProjectSummary> {
@@ -87,31 +86,35 @@ export async function saveProjectOnServer(name: string): Promise<ProjectSummary>
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ name, data: projectData() }),
   });
-  if (!response.ok) throw new Error(`The project was not saved (HTTP ${response.status})`);
-  return (await response.json()) as ProjectSummary;
+  if (!response.ok) throw new Error(await errorMessage(response));
+  const summary = summaryOf(await response.json());
+  if (summary === null) throw new Error("The server returned an unexpected project summary");
+  return summary;
 }
 
 export async function listProjectsOnServer(): Promise<ProjectSummary[]> {
   const response = await fetch("/api/projects");
-  if (!response.ok) throw new Error(`The project list is unavailable (HTTP ${response.status})`);
+  if (!response.ok) throw new Error(await errorMessage(response));
   const body: unknown = await response.json();
-  const projects = (body as { projects?: unknown }).projects;
-  return Array.isArray(projects) ? (projects as ProjectSummary[]) : [];
+  const projects = isRecord(body) ? body["projects"] : undefined;
+  if (!Array.isArray(projects)) throw new Error("The server returned an unexpected project list");
+  return projects.flatMap((project) => {
+    const summary = summaryOf(project);
+    return summary === null ? [] : [summary];
+  });
 }
 
 export async function openProjectFromServer(id: string): Promise<ProjectData> {
   const response = await fetch(`/api/projects?id=${encodeURIComponent(id)}`);
-  if (!response.ok) throw new Error(`The project could not be opened (HTTP ${response.status})`);
-  const body = (await response.json()) as { data?: unknown };
-  const data = body.data as ProjectData | undefined;
-  if (data === undefined || data.version !== 1) throw new Error("The project file has an unknown version");
-  return data;
+  if (!response.ok) throw new Error(await errorMessage(response));
+  const body: unknown = await response.json();
+  if (!isRecord(body)) throw new Error("The server returned an unexpected project");
+  return parseProjectData(body["data"]);
 }
 
 export async function deleteProjectOnServer(id: string): Promise<boolean> {
   const response = await fetch(`/api/projects?id=${encodeURIComponent(id)}`, { method: "DELETE" });
-  if (!response.ok) throw new Error(`The project was not deleted (HTTP ${response.status})`);
-  const body = (await response.json()) as { removed?: boolean };
-  return body.removed === true;
+  if (!response.ok) throw new Error(await errorMessage(response));
+  const body: unknown = await response.json();
+  return isRecord(body) && body["removed"] === true;
 }
-

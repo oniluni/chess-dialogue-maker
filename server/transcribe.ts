@@ -1,7 +1,7 @@
 import { join } from "node:path";
 
 import type { TranscriptLine } from "../shared/transcribe.ts";
-import { decodeWav, SAMPLE_RATE } from "./wav.ts";
+import { SAMPLE_RATE } from "./wav.ts";
 
 const MAX_GAP = 0.8;
 const MIN_SENTENCE_WORDS = 3;
@@ -43,7 +43,7 @@ function transcriber(): Promise<Transcriber> {
   return transcriberPromise;
 }
 
-/** PCM16 mono WAV â†’ samples; the browser always produces 16 kHz mono. */
+/** 16 kHz mono PCM samples; the browser always produces this format. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -95,8 +95,7 @@ function linesOf(words: Word[]): TranscriptLine[] {
   return lines;
 }
 
-export async function transcribe(wav: Buffer, language: string): Promise<TranscriptLine[]> {
-  const audio = decodeWav(wav);
+export async function transcribe(audio: Float32Array, language: string): Promise<TranscriptLine[]> {
   if (audio.length < SAMPLE_RATE * 0.2) throw new Error("the clip is too short to transcribe");
 
   const run = await transcriber();

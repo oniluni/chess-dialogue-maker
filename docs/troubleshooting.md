@@ -15,7 +15,10 @@ yt-dlp needs ffmpeg to merge the video and the audio streams. install it and mak
 the backend already retries the whole video when a site refuses `--download-sections`; the job message says «downloading the whole video». trim in the editor afterwards.
 
 **the same link downloads again**
-the cache is keyed by URL **and** the exact range. a different `from`/`to` is a different download. `.cache/downloads/index.json` can be deleted at any time.
+the cache is keyed by URL **and** the exact range. a different `from`/`to` is a different download. the cached file is reused only while it still exists under `.cache/downloads`; deleting that directory or letting a job expire costs a re-download.
+
+**«The download timed out»**
+a job is stopped after ten minutes. fetch a shorter fragment, or check that the network is not stuck; `yt-dlp` itself retries three times before the timeout.
 
 ## models
 

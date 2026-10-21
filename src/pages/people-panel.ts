@@ -95,6 +95,7 @@ export function createCastPanel(options: { onAvatars: () => void }): CastPanel {
       setStatus("Looking for faces…");
       try {
         const result = await detectPeople(clip.file, clip.range.start, clip.range.end);
+        if (getClip() !== clip) return;
         if (result.persons.length === 0) {
           setPeople(null);
           setStatus("No faces found in the kept range.");
@@ -120,6 +121,7 @@ export function createCastPanel(options: { onAvatars: () => void }): CastPanel {
             }
           }
           if (Object.keys(urls).length > 0) {
+            if (getClip() !== clip) return;
             setAvatars(urls);
             options.onAvatars();
           }

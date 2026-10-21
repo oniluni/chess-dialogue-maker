@@ -1,6 +1,9 @@
+import "./server/env.ts";
+
 import { defineConfig } from "vite";
 
-const API_PORT = Number(process.env["PORT"] ?? 8787);
+const requested = Number(process.env["PORT"] ?? 8787);
+const API_PORT = Number.isInteger(requested) && requested > 0 && requested < 65_536 ? requested : 8787;
 const API_ORIGIN = `http://127.0.0.1:${API_PORT}`;
 const proxy = { "/api": { target: API_ORIGIN } };
 

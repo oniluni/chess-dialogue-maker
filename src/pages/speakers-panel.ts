@@ -92,6 +92,7 @@ export function createSpeakersPanel(options: { onStatus: (text: string) => void 
         wav,
         segments.map((segment) => ({ start: segment.start, end: segment.end })),
       );
+      if (getClip() !== clip || getTranscript() !== segments) return;
       if (result.hints.length !== segments.length) throw new Error("the answer does not match the transcript");
 
       const previous = getSpeakerHints();

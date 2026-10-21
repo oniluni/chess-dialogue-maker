@@ -71,6 +71,7 @@ export function checkDraft(
 
   const start = parseTimestamp(draft.start);
   const end = parseTimestamp(draft.end);
+  let finalEnd: number | null = null;
   if (start === null || end === null) {
     errors.push("Set the start and the end of the move.");
   } else if (Number.isNaN(start)) {
@@ -87,7 +88,11 @@ export function checkDraft(
     } else if (duration !== null && endSeconds > duration + TOLERANCE) {
       warnings.push(`The end is cut to the end of the clip (${formatTimestamp(duration)}).`);
       endSeconds = duration;
+      if (endSeconds - start < MIN_LENGTH) {
+        errors.push(`The move does not fit before the end of the clip (${formatTimestamp(duration)}).`);
+      }
     }
+    finalEnd = endSeconds;
 
     const clash = overlapping(moves, start, endSeconds, index)[0];
     const other = clash === undefined ? undefined : moves[clash];
@@ -120,10 +125,12 @@ export function checkDraft(
   }
 
   const score = Number.isFinite(draft.evalScore) ? draft.evalScore : 0;
+  const endValue = finalEnd ?? end;
+  const clippedEnd = Math.min(endValue, duration ?? endValue);
   return {
     move: {
       start,
-      end: Math.max(start + MIN_LENGTH, Math.min(end, duration ?? end)),
+      end: Math.max(start + MIN_LENGTH, clippedEnd),
       speaker: draft.speaker,
       moveNumber: moveNumber(names, draft.speaker, draft.gist),
       moveType: draft.moveType,

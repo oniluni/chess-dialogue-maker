@@ -38,6 +38,14 @@ pnpm build              # tsc --noEmit + vite build into dist/
 pnpm start              # the backend serves dist/
 ```
 
+checks:
+
+```sh
+pnpm typecheck          # tsc --noEmit, tests included
+pnpm test               # node:test regression suite
+pnpm build              # typecheck + production bundle
+```
+
 the first run downloads the models into `.cache/` (gitignored): whisper into `.cache/transformers`, the rest into `.cache/models`. expect a few hundred MB in total and a slow first transcription, face pass and sound pass.
 
 ## repo layout
@@ -50,7 +58,7 @@ the first run downloads the models into `.cache/` (gitignored): whisper into `.c
 - `server/` — `/api` routes, LLM providers, whisper, WeSpeaker, YuNet/SFace, YAMNet, prosody, yt-dlp, projects
 - `shared/` — types used by both sides
 - `scripts/dev.ts` — starts Vite and the backend together
-- `old/` — the legacy Python version; kept as reference for behaviour, never imported
+- `test/` — `node:test` regression tests for parsers, downloads, API guards and project import
 - `docs/` — [usage](docs/usage.md), [architecture](docs/architecture.md), [configuration](docs/configuration.md), [troubleshooting](docs/troubleshooting.md)
 
 ## features
@@ -72,10 +80,13 @@ the first run downloads the models into `.cache/` (gitignored): whisper into `.c
 ## notes
 
 - the app is local. nothing leaves your machine unless you point the analysis at a cloud provider.
+- the backend listens on `127.0.0.1` only and rejects API requests whose `Host`/`Origin` is not loopback; state-changing JSON endpoints require `application/json`. there is no authentication: any local process can call the API, so the machine is the trust boundary.
+- model downloads use HTTPS and an atomic write, but no pinned checksum; a model file that already exists is trusted.
+- at most two link downloads run at a time; a job that runs longer than ten minutes is stopped.
+- projects are validated when opened; a malformed file is rejected instead of being half-loaded.
 - projects store the document (moves, transcript, names, cast, avatars, sounds, options), **not the video**. open the same clip again after loading.
 - diarization is calibrated on two synthetic voices. one voice or overlapping speech will be unsure, and the UI says so.
 - the `landscape` format puts the UI in a side panel; the geometry is checked by types and builds, not by eye yet.
-- `old/` is the original Python app. it is the reference for behaviour, not a dependency.
 
 ## docs
 

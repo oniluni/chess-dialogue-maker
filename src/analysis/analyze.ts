@@ -90,7 +90,8 @@ function toCandidates(value: unknown, total: number): MoveCandidate[] {
       lastSegment,
       speaker,
       moveType: knownType,
-      strength: typeof strength === "number" ? strength : null,
+      strength:
+        strength === null || strength === undefined ? null : integer(strength, path, "strength", -3, 3),
       gist: textField(raw["gist"], path, "gist"),
       title: textField(raw["title"], path, "title"),
       explanation: textField(raw["explanation"], path, "explanation"),

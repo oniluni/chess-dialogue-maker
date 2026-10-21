@@ -25,14 +25,15 @@ export interface ProsodyResult {
 const METRICS = ["loudness", "pitch", "rate"] as const;
 type Metric = (typeof METRICS)[number];
 
-const LABELS: Record<string, { up: string; down: string }> = {
+const LABELS: Record<Metric, { up: string; down: string | null }> = {
   loudness: { up: "Louder", down: "Quieter" },
-  pitch: { up: "Higher voice", down: "Higher voice" },
+  // The old project only knew "higher": a drop in pitch is not a separate event.
+  pitch: { up: "Higher voice", down: null },
   rate: { up: "Faster", down: "Slower" },
 };
 
 const KIND_UP: Record<Metric, string> = { loudness: "louder", pitch: "higher", rate: "faster" };
-const KIND_DOWN: Record<Metric, string> = { loudness: "quieter", pitch: "higher", rate: "slower" };
+const KIND_DOWN: Record<Metric, string | null> = { loudness: "quieter", pitch: null, rate: "slower" };
 
 const MIN_SEGMENT = 0.25;
 /** A pause longer than this between two lines is worth a tag. */
@@ -82,17 +83,29 @@ function pitch(pcm: Float32Array, from: number, to: number): number | null {
 
     let bestLag = 0;
     let bestScore = 0;
+    const scores = new Float64Array(maxLag + 1);
     for (let lag = minLag; lag <= maxLag; lag += 1) {
       let score = 0;
       for (let index = 0; index < frame; index += 1) {
         score += (pcm[start + index] ?? 0) * (pcm[start + index + lag] ?? 0);
       }
+      scores[lag] = score;
       if (score > bestScore) {
         bestScore = score;
         bestLag = lag;
       }
     }
-    if (bestLag > 0 && bestScore > 0.3 * energy) found.push(SAMPLE_RATE / bestLag);
+    if (bestLag > 0 && bestScore > 0.3 * energy) {
+      // A lower octave can score a hair higher when several periods align exactly; prefer the
+      // shortest lag that is almost as good so the fundamental wins over its sub-harmonic.
+      for (let lag = minLag; lag < bestLag; lag += 1) {
+        if ((scores[lag] ?? 0) >= bestScore * 0.95) {
+          bestLag = lag;
+          break;
+        }
+      }
+      found.push(SAMPLE_RATE / bestLag);
+    }
   }
 
   return found.length === 0 ? null : median(found);
@@ -175,13 +188,13 @@ export function detectProsody(pcm: Float32Array, segments: ProsodySegment[]): Pr
         if (Math.abs(z) < Z_THRESHOLD) continue;
 
         const up = z > 0;
-        // The old project only knew "higher": a drop in pitch is not a separate event.
-        if (metric === "pitch" && !up) continue;
         const labels = LABELS[metric];
-        if (labels === undefined) continue;
+        const label = up ? labels.up : labels.down;
+        const kind = up ? KIND_UP[metric] : KIND_DOWN[metric];
+        if (label === null || kind === null) continue;
         events.push({
-          kind: up ? KIND_UP[metric] : KIND_DOWN[metric],
-          label: up ? labels.up : labels.down,
+          kind,
+          label,
           start: Math.round(segment.start * 100) / 100,
           end: Math.round(segment.end * 100) / 100,
           peak: Math.round(Math.min(1, Math.abs(z) / 3) * 100) / 100,

@@ -176,16 +176,50 @@ interface Loaded {
 
 let loaded: Promise<Loaded> | null = null;
 
+/** Minimal CSV field reader: the class map quotes names that contain commas. */
+function csvFields(line: string): string[] {
+  const fields: string[] = [];
+  let current = "";
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index] ?? "";
+    if (quoted) {
+      if (character === '"') {
+        if (line[index + 1] === '"') {
+          current += '"';
+          index += 1;
+        } else {
+          quoted = false;
+        }
+      } else {
+        current += character;
+      }
+    } else if (character === '"') {
+      quoted = true;
+    } else if (character === ",") {
+      fields.push(current);
+      current = "";
+    } else {
+      current += character;
+    }
+  }
+  fields.push(current);
+  return fields;
+}
+
+export function parseClassMap(csv: string): string[] {
+  return csv
+    .split(/\r?\n/)
+    .slice(1)
+    .filter((line) => line.trim() !== "")
+    .map((line) => csvFields(line)[2] ?? "");
+}
+
 async function load(): Promise<Loaded> {
   if (!existsSync(MODEL) || !existsSync(CLASSES)) {
     throw new Error("the YAMNet model or its class map is missing from .cache/models");
   }
-  const csv = await readFile(CLASSES, "utf8");
-  const classes = csv
-    .split(/\r?\n/)
-    .slice(1)
-    .filter((line) => line.trim() !== "")
-    .map((line) => line.split(",")[2] ?? "");
+  const classes = parseClassMap(await readFile(CLASSES, "utf8"));
   const session = await ort.InferenceSession.create(MODEL);
   return { session, classes };
 }
@@ -198,7 +232,7 @@ function model(): Promise<Loaded> {
   return loaded;
 }
 
-function indicesOf(classes: string[], prefixes: string[]): number[] {
+export function indicesOf(classes: string[], prefixes: string[]): number[] {
   const indices: number[] = [];
   for (const [index, name] of classes.entries()) {
     if (prefixes.some((prefix) => name === prefix || name.startsWith(`${prefix},`) || name.startsWith(`${prefix} `))) {
@@ -207,7 +241,6 @@ function indicesOf(classes: string[], prefixes: string[]): number[] {
   }
   return indices;
 }
-
 /** YAMNet scores for each 0.48 s frame; the ONNX export takes the raw waveform. */
 export async function classify(waveform: Float32Array, duration: number): Promise<SoundDetection[]> {
   const { session, classes } = await model();
@@ -252,32 +285,36 @@ export async function classify(waveform: Float32Array, duration: number): Promis
       while (end + 1 < frames && (active[end + 1] === true || (end + 2 < frames && active[end + 2] === true))) end += 1;
 
       if (end - start + 1 >= kind.minFrames) {
-        const peak = Math.max(...peaks.slice(start, end + 1));
-        let label = kind.label;
-        if (key === "music") {
-          let mood = "";
-          let best = 0.15;
-          for (const [name, moodLabel] of Object.entries(MUSIC_MOODS)) {
-            const moodIndex = indicesOf(classes, [name])[0];
-            if (moodIndex === undefined) continue;
-            for (let frame = start; frame <= end; frame += 1) {
-              const score = value(frame, moodIndex);
-              if (score > best) {
-                best = score;
-                mood = moodLabel;
+        const startTime = Math.min(duration, start * HOP);
+        const endTime = Math.min(duration, end * HOP + WINDOW);
+        if (endTime > startTime) {
+          const peak = Math.max(...peaks.slice(start, end + 1));
+          let label = kind.label;
+          if (key === "music") {
+            let mood = "";
+            let best = 0.15;
+            for (const [name, moodLabel] of Object.entries(MUSIC_MOODS)) {
+              const moodIndex = indicesOf(classes, [name])[0];
+              if (moodIndex === undefined) continue;
+              for (let frame = start; frame <= end; frame += 1) {
+                const score = value(frame, moodIndex);
+                if (score > best) {
+                  best = score;
+                  mood = moodLabel;
+                }
               }
             }
+            if (mood !== "") label = `${kind.label} · ${mood}`;
           }
-          if (mood !== "") label = `${kind.label} · ${mood}`;
+          detections.push({
+            kind: key,
+            label,
+            start: Math.round(startTime * 100) / 100,
+            end: Math.round(endTime * 100) / 100,
+            peak: Math.round(peak * 100) / 100,
+            reliable: peak >= kind.certainAt,
+          });
         }
-        detections.push({
-          kind: key,
-          label,
-          start: Math.round(start * HOP * 100) / 100,
-          end: Math.round(Math.min(duration, end * HOP + WINDOW) * 100) / 100,
-          peak: Math.round(peak * 100) / 100,
-          reliable: peak >= kind.certainAt,
-        });
       }
       start = end + 1;
     }

@@ -1,3 +1,5 @@
+import "../server/env.ts";
+
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { createServer } from "vite";

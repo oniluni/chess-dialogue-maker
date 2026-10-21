@@ -62,9 +62,13 @@ export function createAudioPanel(soundBoard: SoundBoard): HTMLElement {
       const current = getScheduleOptions();
       soundBoard.setVolume(current.sfxVolume);
       soundBoard.setSets(current.sfxTypingSet, current.sfxPauseSet);
-      await soundBoard.unlock();
-      if (!current.sfxEnabled || current.sfxVolume <= 0) return;
-      await soundBoard.playSequence(pauseSfxEvents(PREVIEW_CHARS, PREVIEW_SECONDS, current));
+      try {
+        await soundBoard.unlock();
+        if (!current.sfxEnabled || current.sfxVolume <= 0) return;
+        await soundBoard.playSequence(pauseSfxEvents(PREVIEW_CHARS, PREVIEW_SECONDS, current));
+      } catch (error) {
+        console.warn("sound preview failed:", error);
+      }
     })();
   });
 

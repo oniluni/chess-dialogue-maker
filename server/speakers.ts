@@ -1,7 +1,6 @@
-import { existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { ensureModel } from "./model-download.ts";
 import { SAMPLE_RATE } from "./wav.ts";
 
 const MODEL_URL =
@@ -42,12 +41,7 @@ async function runner(): Promise<Runner> {
   if (runnerPromise !== null) return runnerPromise;
 
   runnerPromise = (async () => {
-    if (!existsSync(MODEL_PATH)) {
-      const response = await fetch(MODEL_URL);
-      if (!response.ok) throw new Error(`could not download the voice model: HTTP ${response.status}`);
-      await mkdir(MODELS_DIR, { recursive: true });
-      await writeFile(MODEL_PATH, Buffer.from(await response.arrayBuffer()));
-    }
+    await ensureModel(MODEL_URL, MODEL_PATH);
 
     const ort = await import("onnxruntime-node");
     const session = await ort.InferenceSession.create(MODEL_PATH);

@@ -73,7 +73,9 @@ export class PreviewPlayer {
       video.pause();
       return;
     }
-    void this.host.sound.unlock();
+    void this.host.sound.unlock().catch((error: unknown) => {
+      console.warn("sound effects are unavailable:", error);
+    });
     if (video.currentTime < range.start || video.currentTime >= range.end) {
       video.currentTime = range.start;
     }

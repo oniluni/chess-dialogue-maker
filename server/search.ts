@@ -1,5 +1,4 @@
-﻿import { spawn } from "node:child_process";
-import { resolveYtdlp } from "./download.ts";
+﻿import { resolveYtdlp, runYtdlp } from "./download.ts";
 
 export interface SearchHit {
   id: string;
@@ -11,6 +10,10 @@ export interface SearchHit {
 }
 
 const CHANNEL = /^@([\w.-]+)\s+(.+)$/;
+const MAX_QUERY = 200;
+const MAX_HITS = 12;
+const TIMEOUT_MS = 60_000;
+const MAX_OUTPUT = 8_000_000;
 
 function queryUrl(query: string): string {
   const channel = CHANNEL.exec(query.trim());
@@ -27,14 +30,13 @@ interface RawResult {
   uploader?: unknown;
   duration?: unknown;
   thumbnail?: unknown;
-  url?: unknown;
-  webpage_url?: unknown;
 }
 
 /** Searches YouTube through yt-dlp; `@handle words` searches inside that channel. */
 export async function search(query: string): Promise<SearchHit[]> {
   const text = query.trim();
   if (text === "") return [];
+  if (text.length > MAX_QUERY) throw new Error(`the search query is longer than ${MAX_QUERY} characters`);
 
   const bin = await resolveYtdlp();
   const args = [
@@ -43,29 +45,20 @@ export async function search(query: string): Promise<SearchHit[]> {
     "--no-warnings",
     "--skip-download",
     "--playlist-end",
-    "12",
+    String(MAX_HITS),
     queryUrl(text),
   ];
 
-  const output = await new Promise<string>((resolve, reject) => {
-    const child = spawn(bin, args, { windowsHide: true });
-    let buffer = "";
-    let error = "";
-    child.stdout.on("data", (chunk: Buffer) => {
-      buffer += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      error += chunk.toString("utf8");
-    });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) resolve(buffer);
-      else reject(new Error(error.trim().split(/\r?\n/).slice(-1)[0] ?? "yt-dlp search failed"));
-    });
-  });
+  const result = await runYtdlp(bin, args, () => undefined, TIMEOUT_MS, MAX_OUTPUT);
+  if (result.timedOut) throw new Error("the YouTube search timed out");
+  if (result.code !== 0) {
+    const lines = result.output.trim().split(/\r?\n/);
+    throw new Error(lines[lines.length - 1] ?? "yt-dlp search failed");
+  }
 
   const hits: SearchHit[] = [];
-  for (const line of output.split(/\r?\n/)) {
+  for (const line of result.output.split(/\r?\n/)) {
+    if (hits.length >= MAX_HITS) break;
     if (line.trim() === "") continue;
     let raw: RawResult;
     try {
@@ -87,4 +80,3 @@ export async function search(query: string): Promise<SearchHit[]> {
   }
   return hits;
 }
-

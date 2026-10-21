@@ -117,7 +117,7 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
     } else {
       const last = segments[segments.length - 1];
       const end = last === undefined ? 0 : last.end;
-      transcriptInfo.textContent = `${segments.length} lines Â· up to ${formatTimestamp(end)}`;
+      transcriptInfo.textContent = `${segments.length} lines · up to ${formatTimestamp(end)}`;
     }
     analyzeButton.disabled =
       clip === null || segments.length === 0 || providerSelect.value === "" || modelSelect.value === "";
@@ -129,7 +129,7 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
     providerSelect.replaceChildren(
       ...providers.map((provider) =>
         el("option", {
-          text: provider.needsKey && !provider.configured ? `${provider.label} Â· no key` : provider.label,
+          text: provider.needsKey && !provider.configured ? `${provider.label} · no key` : provider.label,
           attrs: { value: provider.id },
         }),
       ),
@@ -161,12 +161,12 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
     refresh();
     try {
       const result = await listModels(providerId);
-      if (disposed) return;
+      if (disposed || currentProvider()?.id !== providerId) return;
       models = result.models;
       fillModels();
       if (result.error !== undefined) setStatus(`Model list unavailable: ${result.error}`);
     } catch (error) {
-      if (disposed) return;
+      if (disposed || currentProvider()?.id !== providerId) return;
       setStatus(`Model list unavailable: ${messageOf(error)}`);
     }
     refresh();
@@ -193,6 +193,8 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
     try {
       const segments = parseTranscript(await file.text());
       setTranscript(segments);
+      setRecovery(null);
+      recoveryHost.replaceChildren();
       setStatus(`Imported ${segments.length} lines from ${file.name}`);
     } catch (error) {
       setStatus(messageOf(error));
@@ -205,14 +207,16 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
     if (clip === null) return;
 
     transcribeButton.disabled = true;
-    setStatus("Extracting the audioâ€¦");
+    setStatus("Extracting the audio…");
     try {
       const wav = await extractWav(clip.file);
-      if (disposed) return;
-      setStatus("Transcribingâ€¦ the first run downloads the model.");
+      if (disposed || getClip() !== clip) return;
+      setStatus("Transcribing… the first run downloads the model.");
       const segments = await transcribeWav(wav, languageSelect.value);
-      if (disposed) return;
+      if (disposed || getClip() !== clip) return;
       setTranscript(segments);
+      setRecovery(null);
+      recoveryHost.replaceChildren();
       setStatus(`Transcribed ${segments.length} lines`);
     } catch (error) {
       if (!disposed) setStatus(messageOf(error));
@@ -244,7 +248,7 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
     if (clip === null || segments.length === 0 || choice.provider === "") return;
 
     analyzeButton.disabled = true;
-    setStatus("Asking the modelâ€¦");
+    setStatus("Asking the model…");
     const duration = clip.media.info.duration;
     try {
       const result = await analyzeDialogue({
@@ -255,9 +259,9 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
         duration,
         speakers: speakers.context(),
         sounds: soundContext(),
-        onAttempt: (attempt, total) => setStatus(`Asking the model (attempt ${attempt} of ${total})â€¦`),
+        onAttempt: (attempt, total) => setStatus(`Asking the model (attempt ${attempt} of ${total})…`),
       });
-      if (disposed) return;
+      if (disposed || getClip() !== clip || getTranscript() !== segments) return;
 
       if (result.ok) {
         setRecovery(null);
@@ -266,7 +270,7 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
         options.onMoves(result.moves);
         setStatus(
           `${result.moves.length === 1 ? "1 move" : `${result.moves.length} moves`} on the timeline` +
-            (result.attempts.length > 1 ? ` Â· attempt ${result.attempts.length}` : ""),
+            (result.attempts.length > 1 ? ` · attempt ${result.attempts.length}` : ""),
         );
       } else {
         setRecovery({ attempts: result.attempts, segments, duration });
@@ -304,7 +308,7 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
         recoveryHost.replaceChildren();
         options.onMoves(moves);
         setStatus(
-          `${moves.length === 1 ? "1 move" : `${moves.length} moves`} recovered â€” check them on the Moves page.`,
+          `${moves.length === 1 ? "1 move" : `${moves.length} moves`} recovered — check them on the Moves page.`,
         );
       },
       () => {
@@ -312,7 +316,7 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
           const choice = getLlmChoice();
           const last = attempts[attempts.length - 1];
           if (last === undefined || choice.provider === "") return;
-          setStatus("Asking for one more answerâ€¦");
+          setStatus("Asking for one more answer…");
           try {
             const extra = await extraAttempt(
               {

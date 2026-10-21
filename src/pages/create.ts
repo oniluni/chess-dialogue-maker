@@ -4,6 +4,7 @@ import { SoundBoard } from "../audio/player.ts";
 import { exportMp4 } from "../media/export.ts";
 import { createScene } from "../render/scene.ts";
 import { loadSceneAvatars } from "../render/avatar.ts";
+import type { SceneAvatars } from "../render/avatar.ts";
 import { clearAvatars } from "../render/avatar-store.ts";
 import {
   getClip,
@@ -35,12 +36,13 @@ import { createUrlPanel } from "./url-panel.ts";
 import { createSearchPanel } from "./search-panel.ts";
 import type { Trim } from "./url-panel.ts";
 
-const PLAY_LABEL = "Ã¢â€“Â¶";
-const PAUSE_LABEL = "Ã¢ÂÅ¡Ã¢ÂÅ¡";
+const PLAY_LABEL = "▶";
+const PAUSE_LABEL = "❚❚";
 
 export function renderCreatePage(): Page {
   let clip: Clip | null = getClip();
   let timeline: Timeline | null = null;
+  let opening = false;
   let scene = createScene(getMoves(), getNames(), null, null, getTranscript());
 
   const soundBoard = new SoundBoard();
@@ -117,9 +119,9 @@ export function renderCreatePage(): Page {
     class: "select",
     attrs: { "aria-label": "Output format" },
     children: [
-      el("option", { text: "Vertical Ã‚Â· crop to fill", attrs: { value: "vertical" } }),
-      el("option", { text: "Original Ã‚Â· whole frame", attrs: { value: "original" } }),
-      el("option", { text: "Landscape Ã‚Â· wide canvas", attrs: { value: "landscape" } }),
+      el("option", { text: "Vertical · crop to fill", attrs: { value: "vertical" } }),
+      el("option", { text: "Original · whole frame", attrs: { value: "original" } }),
+      el("option", { text: "Landscape · wide canvas", attrs: { value: "landscape" } }),
     ],
   });
   formatSelect.value = getScheduleOptions().format;
@@ -218,14 +220,19 @@ export function renderCreatePage(): Page {
     if (clip === null) return;
     const { start, end } = clip.range;
     const schedule = scheduleFor(clip);
-    const extra = schedule.duration > end - start + 0.01 ? ` Ã‚Â· output ${formatTimestamp(schedule.duration)}` : "";
-    selection.textContent = `Selection ${formatTimestamp(start)} Ã¢â‚¬â€œ ${formatTimestamp(end)} Ã‚Â· ${(end - start).toFixed(1)} s${extra}`;
+    const extra = schedule.duration > end - start + 0.01 ? ` · output ${formatTimestamp(schedule.duration)}` : "";
+    selection.textContent = `Selection ${formatTimestamp(start)} – ${formatTimestamp(end)} · ${(end - start).toFixed(1)} s${extra}`;
     timeline?.setRange({ start, end });
   }
 
   function rebuildScene(): void {
     void (async (): Promise<void> => {
-      const avatars = await loadSceneAvatars();
+      let avatars: SceneAvatars | null = null;
+      try {
+        avatars = await loadSceneAvatars();
+      } catch (error) {
+        console.warn("avatars could not be loaded:", error);
+      }
       scene = createScene(getMoves(), getNames(), avatars, getPeople()?.frames ?? null, getTranscript());
       canvas.width = scene.width;
       canvas.height = scene.height;
@@ -238,11 +245,11 @@ export function renderCreatePage(): Page {
     const info = next.media.info;
     video.src = next.objectUrl;
     meta.textContent = [
-      `${info.width}Ãƒâ€”${info.height}`,
+      `${info.width}×${info.height}`,
       formatClock(info.duration),
       formatBytes(next.file.size),
       info.hasAudio ? "with audio" : "without audio",
-    ].join(" Ã‚Â· ");
+    ].join(" · ");
     playerRow.hidden = false;
     exportRow.element.hidden = false;
     exportRow.hideDownload();
@@ -267,14 +274,17 @@ export function renderCreatePage(): Page {
     updateSelection();
     clock.textContent = `0:00.0 / ${formatTimestamp(info.duration)}`;
     analysis.refresh();
+    rebuildScene();
     setStatus(next.file.name);
   }
 
   async function openFile(file: File, trim: Trim | null = null): Promise<void> {
-    clearAvatars();
-    setStatus(`Opening ${file.name}Ã¢â‚¬Â¦`);
+    if (opening) return;
+    opening = true;
+    setStatus(`Opening ${file.name}…`);
     try {
       const opened = await openClip(file);
+      clearAvatars();
       if (trim !== null) {
         const duration = opened.media.info.duration;
         setClipRange({ start: trim.start, end: Math.min(trim.end ?? duration, duration) });
@@ -282,6 +292,8 @@ export function renderCreatePage(): Page {
       showClip(opened);
     } catch (error) {
       setStatus(messageOf(error));
+    } finally {
+      opening = false;
     }
   }
 
@@ -290,7 +302,7 @@ export function renderCreatePage(): Page {
     exportRow.setBusy(true);
     exportRow.hideDownload();
     exportRow.setProgress(0);
-    setStatus("Rendering MP4Ã¢â‚¬Â¦");
+    setStatus("Rendering MP4…");
     try {
       const blob = await exportMp4({
         video: clip.media.video,

@@ -62,7 +62,7 @@ export function renderSoundsPage(): Page {
     const events = getSoundEvents();
     list.replaceChildren(
       ...events.map((event) => {
-        const remove = el("button", { class: "button button-small", text: "âœ•", attrs: { type: "button" } });
+        const remove = el("button", { class: "button button-small", text: "✕", attrs: { type: "button" } });
         remove.addEventListener("click", () => {
           removeSoundEvent(event.id);
           render();
@@ -120,9 +120,10 @@ export function renderSoundsPage(): Page {
         return;
       }
       detectButton.disabled = true;
-      setStatus("Listening to the clipâ€¦");
+      setStatus("Listening to the clip…");
       try {
         const found = await detectSounds(clip.file);
+        if (getClip() !== clip) return;
         replaceDetected([
           ...modelEvents(),
           ...found.map((event) => ({
@@ -152,9 +153,10 @@ export function renderSoundsPage(): Page {
         return;
       }
       deliveryButton.disabled = true;
-      setStatus("Comparing the deliveryâ€¦");
+      setStatus("Comparing the delivery…");
       try {
         const found = await detectDelivery(clip.file);
+        if (getClip() !== clip) return;
         replaceDetected([
           ...modelEvents(),
           ...found.map((event) => ({

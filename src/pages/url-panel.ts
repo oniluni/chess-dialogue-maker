@@ -38,7 +38,7 @@ export function createUrlPanel(onFile: (file: File, trim: Trim | null) => void):
 
   const urlInput = el("input", {
     class: "text-input",
-    attrs: { type: "url", placeholder: "https://www.youtube.com/watch?v=â€¦", "aria-label": "Video link" },
+    attrs: { type: "url", placeholder: "https://www.youtube.com/watch?v=…", "aria-label": "Video link" },
   });
   const fromInput = el("input", {
     class: "text-input time-input",
@@ -132,7 +132,7 @@ export function createUrlPanel(onFile: (file: File, trim: Trim | null) => void):
 
     setBusy(true);
     progress.value = 0;
-    show("Starting the downloadâ€¦");
+    show("Starting the download…");
     try {
       const id = await startDownload(url, from, to);
       jobId = id;

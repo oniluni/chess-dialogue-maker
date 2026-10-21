@@ -10,7 +10,7 @@ export interface DialogueLine {
   end: number;
   text: string;
   speaker: Side | null;
-  /** âˆ’3â€¦+3, how strong the line was for its speaker; drives the automatic move type. */
+  /** −3…+3, how strong the line was for its speaker; drives the automatic move type. */
   strength: number | null;
   /** A short motif of the line, used as the gist when the moment has none. */
   motif: string;
@@ -44,7 +44,7 @@ export interface DialogueBuild {
 
 function gistOf(moveNumber: string): string {
   const text = moveNumber.replace(/^\s*\d+[.)]?\s*/, "").trim();
-  const marker = text.indexOf(" Â· ");
+  const marker = text.indexOf(" · ");
   return marker < 0 ? "" : text.slice(marker + 3).trim();
 }
 
@@ -160,7 +160,7 @@ export function buildDialogue(dialogue: Dialogue, names: Names, duration: number
 
     const speaker = moment.speaker ?? majority(lines.map((line) => line.speaker).filter((side): side is Side => side !== null));
     if (speaker === null) {
-      errors.push(`Moment ${number}: nobody speaks in its lines â€” pick a side.`);
+      errors.push(`Moment ${number}: nobody speaks in its lines — pick a side.`);
       continue;
     }
 

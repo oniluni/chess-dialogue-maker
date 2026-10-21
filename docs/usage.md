@@ -7,7 +7,7 @@ the flow is one page, top to bottom: open a clip → transcribe → name the voi
 `#/create` starts with a drop zone, a link field and a search block.
 
 - **local file** — drop it or pick it; anything the browser can decode (mp4, mkv, webm, mov) works
-- **link** — paste a YouTube (or yt-dlp-supported) URL, optionally set from/to to fetch just a fragment. yt-dlp is spawned with `--download-sections`; if the site refuses the fragment the backend retries the whole video and says so
+- **link** — paste a YouTube (or yt-dlp-supported) URL, optionally set from/to to fetch just a fragment. yt-dlp is spawned with `--download-sections`; if the site refuses the fragment the backend retries the whole video and says so. two downloads run at a time and a job is stopped after ten minutes
 - **search** — `chess blunder` searches YouTube, `@handle words` searches inside that channel. «Use» puts the link into the URL field
 
 below the player:
@@ -68,7 +68,7 @@ pick a provider and a model, then «Analyze dialogue». the backend asks for a J
 `#/sounds` has two detectors and a manual list:
 
 - **sounds** — YAMNet on the clip audio: laughter, crying, scream, whisper, sigh, gasp, groan, cough, singing, music (+ mood), applause, crowd, door, phone, siren, shot, glass, footsteps, vehicle, weather, animal, TV
-- **delivery** — each line against the same voice's usual manner: louder, quieter, higher, faster, slower, pauses
+- **delivery** — each line against the same voice's usual manner: louder, quieter, higher, faster, slower, pauses. a drop in pitch is not tagged; the check keeps the original behaviour
 - manual events stay when you re-detect
 
 only model events marked reliable are drawn in the video, and a tag never lives longer than 3 seconds. reliable events are also passed to the analysis prompt as context.
@@ -80,7 +80,7 @@ only model events marked reliable are drawn in the video, and a tag never lives 
 
 ## 11. projects
 
-`Save project` stores the document in `.cache/projects` on the backend: moves, transcript, names, cast, avatars, sounds, options, style, provider choice. `Open` restores it and re-renders the page.
+`Save project` stores the document in `.cache/projects` on the backend: moves, transcript, names, cast, avatars, sounds, options, style, provider choice. `Open` restores it and re-renders the page. the document is validated on open; a malformed project is rejected instead of being partially loaded.
 
 the video is **not** stored — open the same clip again after loading.
 

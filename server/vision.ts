@@ -1,6 +1,6 @@
-import { existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+
+import { ensureModel } from "./model-download.ts";
 
 const MODELS = join(import.meta.dirname, "..", ".cache", "models");
 const DETECTOR = join(MODELS, "face_detection_yunet_2023mar.onnx");
@@ -70,14 +70,9 @@ interface Model {
 }
 
 async function load(path: string): Promise<Model> {
-  if (!existsSync(path)) {
-    const url = URLS[path.split(/[\\/]/).pop() ?? ""];
-    if (url === undefined) throw new Error("no model url");
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`download failed: HTTP ${response.status}`);
-    await mkdir(MODELS, { recursive: true });
-    await writeFile(path, Buffer.from(await response.arrayBuffer()));
-  }
+  const url = URLS[basename(path)];
+  if (url === undefined) throw new Error("no model url");
+  await ensureModel(url, path);
   const ort = await import("onnxruntime-node");
   return { ort, session: await ort.InferenceSession.create(path) };
 }

@@ -210,8 +210,38 @@ function explain(status: number, detail: string): { title: string; hint: string 
   return null;
 }
 
+const MAX_RESPONSE_BYTES = 2_000_000;
+
+/** Reads a provider answer without letting a broken or hostile endpoint fill memory. */
+async function responseText(response: Response, label: string): Promise<string> {
+  const declared = Number(response.headers.get("content-length") ?? "0");
+  if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
+    await response.body?.cancel();
+    throw new LlmError(`${label} answered with too much data`);
+  }
+  if (response.body === null) return "";
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw new LlmError(`${label} answered with too much data`);
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 async function readJson(response: Response, label: string): Promise<unknown> {
-  const raw = await response.text();
+  const raw = await responseText(response, label);
   if (!response.ok) {
     const known = explain(response.status, raw);
     throw new LlmError(known?.title ?? `${label} answered ${response.status}`, known?.hint ?? summarise(raw), response.status);

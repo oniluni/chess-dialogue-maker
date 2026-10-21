@@ -13,5 +13,5 @@
     "allowImportingTsExtensions": true,
     "erasableSyntaxOnly": true
   },
-  "include": ["src", "server", "shared", "scripts", "vite.config.ts"]
+  "include": ["src", "server", "shared", "scripts", "test", "vite.config.ts"]
 }

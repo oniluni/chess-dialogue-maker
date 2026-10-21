@@ -187,10 +187,18 @@ export function sanitizeMoves(moves: Move[], duration: number | null): Move[] {
   for (const move of sorted) {
     const next = { ...move };
     if (duration !== null) {
-      next.start = Math.min(next.start, duration);
-      next.end = Math.min(next.end, duration);
+      next.start = Math.min(Math.max(0, next.start), duration);
+      next.end = Math.min(Math.max(0, next.end), duration);
     }
-    if (next.end <= next.start) next.end = next.start + 1;
+    if (next.end <= next.start) {
+      if (duration !== null && next.start >= duration) {
+        next.start = Math.max(0, duration - 1);
+        next.end = duration;
+      } else {
+        next.end = duration === null ? next.start + 1 : Math.min(next.start + 1, duration);
+      }
+    }
+    if (next.end <= next.start) continue;
     next.start = roundMilliseconds(next.start);
     next.end = roundMilliseconds(next.end);
     const previous = kept[kept.length - 1];

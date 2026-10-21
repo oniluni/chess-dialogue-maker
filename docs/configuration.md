@@ -41,7 +41,9 @@ bigger checkpoints (`whisper-medium`, `whisper-large-v3-turbo`) are better and m
 | `YTDLP_COOKIES` | — | path to a Netscape `cookies.txt` |
 | `YTDLP_COOKIES_FROM_BROWSER` | — | `chrome`, `firefox`, `edge`… — yt-dlp reads the browser's cookies itself |
 
-cookies saved from the UI (`Search → Cookies and yt-dlp`) go to `.cache/yt-cookies.txt` and take priority over both variables. delete the file to fall back.
+cookies saved from the UI (`Search → Cookies and yt-dlp`) go to `.cache/yt-cookies.txt` and take priority over both variables. delete the file to fall back. on POSIX the file is written with mode `0600` inside an owner-only `.cache`; on Windows it inherits the ACL of the user profile. cookie values are never returned by the API.
+
+link downloads run two at a time and time out after ten minutes. the cache reuses the same URL and the same exact range while the downloaded file is still under `.cache/downloads`.
 
 ## backend
 
