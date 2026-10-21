@@ -2,9 +2,22 @@ import type { LlmChatMessage } from "../../shared/llm.ts";
 import { chat } from "../llm/api.ts";
 import type { Names } from "../names.ts";
 import { MOVE_TYPES, sanitizeMoves } from "./move.ts";
-import type { Move, MoveType, Side } from "./move.ts";
+import type { Move, MoveType } from "./move.ts";
 import { buildMovePrompt } from "./prompt.ts";
+import { moveFromCandidate, reviewCandidates, shapeEvals, targetMoves } from "./quality.ts";
+import type { MoveCandidate } from "./quality.ts";
 import type { TranscriptSegment } from "./transcript.ts";
+
+export interface AnalysisAttempt {
+  index: number;
+  issues: string[];
+  reply: string;
+  candidates: MoveCandidate[] | null;
+}
+
+export type AnalysisResult =
+  | { ok: true; moves: Move[]; attempts: AnalysisAttempt[] }
+  | { ok: false; attempts: AnalysisAttempt[] };
 
 export interface AnalyzeOptions {
   segments: TranscriptSegment[];
@@ -15,21 +28,7 @@ export interface AnalyzeOptions {
   onAttempt?: (attempt: number, total: number) => void;
 }
 
-interface Draft {
-  firstSegment: number;
-  lastSegment: number;
-  speaker: Side;
-  moveType: MoveType;
-  strength: number;
-  gist: string;
-  title: string;
-  explanation: string;
-  evalScore: number;
-}
-
 const MAX_ATTEMPTS = 3;
-const MIN_COVERAGE = 0.8;
-const MIN_MOVES = 2;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -63,7 +62,7 @@ function evalField(value: unknown, path: string): number {
   return Math.round(Math.min(10, Math.max(-10, value)) * 10) / 10;
 }
 
-function toDrafts(value: unknown, total: number): Draft[] {
+function toCandidates(value: unknown, total: number): MoveCandidate[] {
   if (!isRecord(value)) throw new Error('expected {"moves": [...]}');
   const list = value["moves"];
   if (!Array.isArray(list) || list.length === 0) throw new Error('"moves" must be a non-empty array');
@@ -79,15 +78,16 @@ function toDrafts(value: unknown, total: number): Draft[] {
     if (speaker !== "white" && speaker !== "black") throw new Error(`${path}: "speaker" must be white or black`);
 
     const moveType = raw["move_type"];
-    const knownType = MOVE_TYPES.find((type) => type === moveType);
+    const knownType: MoveType | undefined = MOVE_TYPES.find((type) => type === moveType);
     if (knownType === undefined) throw new Error(`${path}: unknown move_type "${String(moveType)}"`);
 
+    const strength = raw["strength"];
     return {
       firstSegment,
       lastSegment,
       speaker,
       moveType: knownType,
-      strength: integer(raw["strength"], path, "strength", -3, 3),
+      strength: typeof strength === "number" ? strength : null,
       gist: textField(raw["gist"], path, "gist"),
       title: textField(raw["title"], path, "title"),
       explanation: textField(raw["explanation"], path, "explanation"),
@@ -96,56 +96,19 @@ function toDrafts(value: unknown, total: number): Draft[] {
   });
 }
 
-function review(drafts: Draft[], total: number): string[] {
-  const issues: string[] = [];
-  if (drafts.length < MIN_MOVES) {
-    issues.push(`only ${drafts.length} moves; the review needs at least ${MIN_MOVES}`);
-  }
-
-  let covered = 0;
-  let previousEnd = -1;
-  for (const [index, draft] of drafts.entries()) {
-    if (draft.firstSegment <= previousEnd) issues.push(`move ${index + 1} overlaps the previous one`);
-    previousEnd = Math.max(previousEnd, draft.lastSegment);
-    covered += draft.lastSegment - draft.firstSegment + 1;
-    if (draft.title.length > 80) issues.push(`move ${index + 1}: the title is longer than 80 characters`);
-    if (draft.explanation.length < 30) issues.push(`move ${index + 1}: the explanation is too short`);
-  }
-
-  if (total > 0 && covered / total < MIN_COVERAGE) {
-    issues.push(`the moves cover only ${Math.round((covered / total) * 100)}% of the dialogue lines`);
-  }
-  return issues;
-}
-
-function toMoves(drafts: Draft[], segments: TranscriptSegment[], names: Names, duration: number | null): Move[] {
-  const moves = drafts.map((draft): Move => {
-    const first = segments[draft.firstSegment];
-    const last = segments[draft.lastSegment];
-    if (first === undefined || last === undefined) throw new Error("a move points outside the dialogue");
-    return {
-      start: first.start,
-      end: last.end,
-      speaker: draft.speaker,
-      moveNumber: `${names[draft.speaker]} · ${draft.gist}`,
-      moveType: draft.moveType,
-      title: draft.title,
-      explanation: draft.explanation,
-      evalScore: draft.evalScore,
-    };
-  });
-  return sanitizeMoves(moves, duration);
-}
-
-/** Asks the model for moves, validates them and retries with the found problems. */
-export async function analyzeDialogue(options: AnalyzeOptions): Promise<Move[]> {
-  const prompt = buildMovePrompt(options.segments, options.names);
+/** Asks the model for moves, checks them and retries with the found problems. */
+export async function analyzeDialogue(options: AnalyzeOptions): Promise<AnalysisResult> {
+  const targets = targetMoves(options.segments);
+  const prompt = buildMovePrompt(options.segments, options.names, targets);
+  const attempts: AnalysisAttempt[] = [];
   let messages: LlmChatMessage[] = prompt.messages;
-  let issues: string[] = [];
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     options.onAttempt?.(attempt, MAX_ATTEMPTS);
     let reply = "";
+    let candidates: MoveCandidate[] | null = null;
+    let issues: string[] = [];
+
     try {
       reply = await chat({
         provider: options.provider,
@@ -154,14 +117,23 @@ export async function analyzeDialogue(options: AnalyzeOptions): Promise<Move[]> 
         schema: prompt.schema,
         temperature: 0.4,
       });
-      const drafts = toDrafts(parseJson(reply), options.segments.length);
-      issues = review(drafts, options.segments.length);
-      if (issues.length === 0) {
-        return toMoves(drafts, options.segments, options.names, options.duration);
-      }
+      candidates = toCandidates(parseJson(reply), options.segments.length);
+      issues = reviewCandidates(candidates, options.segments, targets.min);
     } catch (error) {
       issues = [error instanceof Error ? error.message : String(error)];
     }
+
+    attempts.push({ index: attempt, issues, reply, candidates });
+    if (candidates !== null && issues.length === 0) {
+      const moves = shapeEvals(
+        sanitizeMoves(
+          candidates.map((candidate) => moveFromCandidate(candidate, options.segments, options.names)),
+          options.duration,
+        ),
+      );
+      return { ok: true, moves, attempts };
+    }
+
     messages = [
       ...prompt.messages,
       { role: "assistant", content: reply.slice(0, 6000) },
@@ -174,5 +146,5 @@ export async function analyzeDialogue(options: AnalyzeOptions): Promise<Move[]> 
     ];
   }
 
-  throw new Error(`the model did not produce a valid analysis: ${issues.join("; ")}`);
+  return { ok: false, attempts };
 }

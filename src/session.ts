@@ -1,3 +1,5 @@
+import type { AnalysisAttempt } from "./analysis/analyze.ts";
+import type { Dialogue } from "./analysis/dialogue.ts";
 import type { Move } from "./analysis/move.ts";
 import { DEFAULT_SCHEDULE_OPTIONS } from "./analysis/schedule.ts";
 import type { ScheduleOptions } from "./analysis/schedule.ts";
@@ -22,6 +24,13 @@ export interface LlmChoice {
   model: string;
 }
 
+/** Answers that failed the checks, waiting for a human choice. */
+export interface RecoveryState {
+  attempts: AnalysisAttempt[];
+  segments: TranscriptSegment[];
+  duration: number | null;
+}
+
 let clip: Clip | null = null;
 let moves: Move[] = [];
 let movesBackup: Move[] | null = null;
@@ -29,6 +38,24 @@ let transcript: TranscriptSegment[] = [];
 let scheduleOptions: ScheduleOptions = { ...DEFAULT_SCHEDULE_OPTIONS };
 let names: Names = { ...DEFAULT_NAMES };
 let llm: LlmChoice = { provider: "", model: "" };
+let recovery: RecoveryState | null = null;
+let dialogue: Dialogue | null = null;
+
+export function getDialogue(): Dialogue | null {
+  return dialogue;
+}
+
+export function setDialogue(next: Dialogue | null): void {
+  dialogue = next;
+}
+
+export function getRecovery(): RecoveryState | null {
+  return recovery;
+}
+
+export function setRecovery(next: RecoveryState | null): void {
+  recovery = next;
+}
 
 export function getScheduleOptions(): ScheduleOptions {
   return scheduleOptions;
@@ -113,4 +140,6 @@ export function closeClip(): void {
   moves = [];
   movesBackup = null;
   transcript = [];
+  recovery = null;
+  dialogue = null;
 }

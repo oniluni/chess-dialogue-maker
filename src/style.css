@@ -622,3 +622,94 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+.manual-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 18px 0;
+}
+
+.line-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.line-number {
+  width: 24px;
+  color: var(--muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.line-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.line-side {
+  width: 100px;
+}
+
+.moments {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.moment-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.moment-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.recovery {
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.recovery-step {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+.recovery-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.recovery-head .select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.recovery-number {
+  width: 22px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.recovery-preview {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}

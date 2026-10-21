@@ -9,13 +9,16 @@ import {
   getClip,
   getLlmChoice,
   getNames,
+  getRecovery,
   getTranscript,
   setLlmChoice,
   setMoves,
+  setRecovery,
   setTranscript,
 } from "../session.ts";
 import { el } from "../ui/dom.ts";
 import { formatTimestamp, messageOf } from "../ui/text.ts";
+import { createRecoveryPanel } from "./recovery-panel.ts";
 
 const LANGUAGES = [
   { id: "ru", label: "Russian" },
@@ -64,6 +67,7 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
     attrs: { type: "button" },
   });
   const status = el("p", { class: "status-line" });
+  const recoveryHost = el("div", { class: "recovery-host" });
 
   const element = el("section", {
     class: "analysis",
@@ -88,6 +92,7 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
       }),
       fileInput,
       status,
+      recoveryHost,
     ],
   });
 
@@ -234,19 +239,32 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
 
     analyzeButton.disabled = true;
     setStatus("Asking the model…");
+    const duration = clip.media.info.duration;
     try {
-      const moves = await analyzeDialogue({
+      const result = await analyzeDialogue({
         segments,
         names: getNames(),
         provider: choice.provider,
         model: choice.model,
-        duration: clip.media.info.duration,
+        duration,
         onAttempt: (attempt, total) => setStatus(`Asking the model (attempt ${attempt} of ${total})…`),
       });
       if (disposed) return;
-      setMoves(moves, { keepBackup: true });
-      options.onMoves(moves);
-      setStatus(`${moves.length === 1 ? "1 move" : `${moves.length} moves`} on the timeline`);
+
+      if (result.ok) {
+        setRecovery(null);
+        recoveryHost.replaceChildren();
+        setMoves(result.moves, { keepBackup: true });
+        options.onMoves(result.moves);
+        setStatus(
+          `${result.moves.length === 1 ? "1 move" : `${result.moves.length} moves`} on the timeline` +
+            (result.attempts.length > 1 ? ` · attempt ${result.attempts.length}` : ""),
+        );
+      } else {
+        setRecovery({ attempts: result.attempts, segments, duration });
+        showRecovery(result.attempts, segments, duration);
+        setStatus("The answers failed the checks: pick a variant for each step below.");
+      }
     } catch (error) {
       if (!disposed) setStatus(messageOf(error));
     } finally {
@@ -255,6 +273,23 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
         refresh();
       }
     }
+  }
+
+  function showRecovery(
+    attempts: Parameters<typeof createRecoveryPanel>[0],
+    segments: Parameters<typeof createRecoveryPanel>[1],
+    duration: number | null,
+  ): void {
+    const panel = createRecoveryPanel(attempts, segments, duration, (moves) => {
+      setMoves(moves, { keepBackup: true });
+      setRecovery(null);
+      recoveryHost.replaceChildren();
+      options.onMoves(moves);
+      setStatus(`${moves.length === 1 ? "1 move" : `${moves.length} moves`} recovered — check them on the Moves page.`);
+    });
+    recoveryHost.replaceChildren(
+      panel ?? el("p", { class: "status-line", text: "No answer had a usable list of moves." }),
+    );
   }
 
   importButton.addEventListener("click", () => fileInput.click());
@@ -280,6 +315,11 @@ export function createAnalysisPanel(options: { onMoves: (moves: Move[]) => void 
   void loadProviders();
   void loadTranscriptionInfo();
   refresh();
+
+  const pending = getRecovery();
+  if (pending !== null) {
+    showRecovery(pending.attempts, pending.segments, pending.duration);
+  }
 
   return {
     element,

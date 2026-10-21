@@ -13,55 +13,69 @@ Turn the dialogue into "moves" of a Chess.com-style game review.
 
 Rules:
 - Every move covers a consecutive range of the numbered dialogue lines. Together the moves must cover the whole clip, in order, without overlaps.
+- Use the number of moves the request asks for: fewer and the review drags, more and the cards blur together.
+- effect: one sentence about what actually changed in the exchange. Think about it before you classify.
 - move_type is one of: Brilliant, Great, Best, Inaccuracy, Mistake, Blunder.
-- strength is an integer from -3 to +3: how good the exchange was for the player making it.
+- strength is an integer from -3 to +3: how good the exchange was for the player making it. It must agree with move_type.
 - speaker is "white" or "black" — the player who makes this move.
 - gist is a 2 to 5 word summary of the exchange.
-- title is a short hook, at most 8 words. Never quote the dialogue and never use clichés like "a brilliant move".
+- title is a short hook: what happened first, then a dash and the verdict, at most 8 words. Never quote the dialogue, never start with the verdict.
 - explanation is 1 or 2 sentences about what actually happened: which words changed the balance and why. Write it in the language of the dialogue.
 - eval_score is the position after the move, from -10 (Black is winning) to +10 (White is winning).
-- first_segment and last_segment are the indices of the numbered lines this move covers.
-- Never invent facts that are not in the dialogue.
+- Never invent facts that are not in the dialogue. No clichés, no "it is worth noting".
 
 Answer with JSON only, exactly this shape: {"moves": [...]}`;
 
-export const MOVE_SCHEMA: Record<string, unknown> = {
-  type: "object",
-  properties: {
-    moves: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          first_segment: { type: "integer" },
-          last_segment: { type: "integer" },
-          speaker: { type: "string", enum: ["white", "black"] },
-          move_type: {
-            type: "string",
-            enum: ["Brilliant", "Great", "Best", "Inaccuracy", "Mistake", "Blunder"],
-          },
-          strength: { type: "integer", minimum: -3, maximum: 3 },
-          gist: { type: "string" },
-          title: { type: "string" },
-          explanation: { type: "string" },
-          eval_score: { type: "number", minimum: -10, maximum: 10 },
-        },
-        required: [
-          "first_segment",
-          "last_segment",
-          "speaker",
-          "move_type",
-          "strength",
-          "gist",
-          "title",
-          "explanation",
-          "eval_score",
-        ],
+const FIELD_ORDER = [
+  "first_segment",
+  "last_segment",
+  "speaker",
+  "effect",
+  "strength",
+  "move_type",
+  "eval_score",
+  "gist",
+  "title",
+  "explanation",
+] as const;
+
+function itemSchema(): Record<string, unknown> {
+  const properties: Record<string, unknown> = {
+    first_segment: { type: "integer" },
+    last_segment: { type: "integer" },
+    speaker: { type: "string", enum: ["white", "black"] },
+    effect: { type: "string" },
+    strength: { type: "integer", minimum: -3, maximum: 3 },
+    move_type: {
+      type: "string",
+      enum: ["Brilliant", "Great", "Best", "Inaccuracy", "Mistake", "Blunder"],
+    },
+    eval_score: { type: "number", minimum: -10, maximum: 10 },
+    gist: { type: "string" },
+    title: { type: "string" },
+    explanation: { type: "string" },
+  };
+  return {
+    type: "object",
+    properties: Object.fromEntries(FIELD_ORDER.map((field) => [field, properties[field]])),
+    required: [...FIELD_ORDER],
+  };
+}
+
+export function moveSchema(targets: { min: number; max: number }): Record<string, unknown> {
+  return {
+    type: "object",
+    properties: {
+      moves: {
+        type: "array",
+        minItems: targets.min,
+        maxItems: targets.max,
+        items: itemSchema(),
       },
     },
-  },
-  required: ["moves"],
-};
+    required: ["moves"],
+  };
+}
 
 function clock(seconds: number): string {
   const minutes = Math.floor(seconds / 60);
@@ -76,17 +90,22 @@ export function transcriptLines(segments: TranscriptSegment[]): string {
     .join("\n");
 }
 
-export function buildMovePrompt(segments: TranscriptSegment[], names: Names): MovePrompt {
+export function buildMovePrompt(
+  segments: TranscriptSegment[],
+  names: Names,
+  targets: { min: number; max: number },
+): MovePrompt {
   return {
     messages: [
       { role: "system", content: SYSTEM },
       {
         role: "user",
         content:
-          `Players: White is "${names.white}", Black is "${names.black}".\n\n` +
+          `Players: White is "${names.white}", Black is "${names.black}".\n` +
+          `Write between ${targets.min} and ${targets.max} moves.\n\n` +
           `Dialogue lines:\n${transcriptLines(segments)}`,
       },
     ],
-    schema: MOVE_SCHEMA,
+    schema: moveSchema(targets),
   };
 }

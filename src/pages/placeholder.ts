@@ -3,10 +3,9 @@ import type { RouteId } from "../app/routes.ts";
 import { el } from "../ui/dom.ts";
 import type { Page } from "./page.ts";
 
-type StubRoute = Exclude<RouteId, "create" | "moves">;
+type StubRoute = Exclude<RouteId, "create" | "moves" | "manual">;
 
 const PLANNED: Record<StubRoute, string> = {
-  manual: "the manual analysis",
   sounds: "sound events",
   style: "the style editor",
 };
