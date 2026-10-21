@@ -5,8 +5,11 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node scripts/dev.ts",
+    "dev:web": "vite",
+    "dev:server": "node server/index.ts",
     "build": "tsc --noEmit && vite build",
+    "start": "node server/index.ts",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit"
   },
@@ -15,6 +18,7 @@
     "mediabunny": "^1.61.6"
   },
   "devDependencies": {
+    "@types/node": "^26.6.5",
     "typescript": "^7.0.2",
     "vite": "^8.3.4"
   }

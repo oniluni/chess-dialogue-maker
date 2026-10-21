@@ -10,14 +10,20 @@ The stack is fixed: Vite 8, TypeScript 7 under `strict`, no UI framework, `media
 for media I/O, `lucide` for icons. `pnpm` is the package manager and `pnpm-lock.yaml` is
 committed. The entry is `index.html` → `src/main.ts`, which imports `src/style.css`.
 
+The backend is a small Node process in `server/`, started next to Vite. It is not bundled:
+Node 26 runs the `.ts` files directly, so every import keeps its explicit `.ts` extension.
+
 | Path | Purpose |
 | --- | --- |
-| `src/` | New code; flat until the first modules land |
+| `src/` | UI: shell, hash router, pages, state, styles |
+| `server/` | Local backend: `/api` routes and serving the built `dist/` |
+| `shared/` | Types used by both the UI and the backend |
+| `scripts/` | Dev tooling; `dev.ts` starts Vite and the backend together |
 | `public/` | Static files served as-is |
 | `index.html` | Vite entry |
 
-`src/` has no layout yet. The directory-by-role table belongs here once the first modules
-exist; do not invent structure ahead of the code that needs it.
+`src/main.ts` mounts the shell (`app/shell.ts`), starts the hash router (`app/router.ts`)
+and health polling (`api.ts`). Pages live in `ui/pages.ts` and are added one by one.
 
 ## Rules
 
@@ -91,15 +97,18 @@ Explicit user instructions override these defaults.
 
 ## Media
 
-Not settled: whether the heavy work (transcoding, speech, models) runs in the browser via
-WASM/WebGPU or in a local backend beside Vite. Container and codec I/O stays on
-`mediabunny`. When the decision lands, record it here with the modules it created.
+Two halves. The browser owns media: `mediabunny` demuxes, decodes and encodes on WebCodecs,
+so trim, preview and export need no ffmpeg. The Node backend owns whatever needs a binary or
+a native model — downloads, speech, inference — because a page cannot load those.
 
 ## UI
 
 No framework: components, state and routing are hand-rolled and typed. Split pages by
-feature and keep each builder small. Record the chosen state pattern here once the first
-page exists.
+feature and keep each builder small. `el()` in `ui/dom.ts` builds nodes; user text never
+goes through `innerHTML`.
+
+State is one `AppState` in `src/state.ts` with `get`/`set`/`subscribe`; a subscriber
+re-renders only the part it owns. Routes are `#/<id>` hashes listed in `app/routes.ts`.
 
 ## Checks
 
@@ -110,6 +119,8 @@ Run the checks that match the change; documentation-only edits need no build.
 | TypeScript | `pnpm typecheck` |
 | Production bundle | `pnpm build` |
 | UI in the browser | `pnpm dev` → `http://127.0.0.1:5173` |
+| Backend only | `pnpm dev:server` → `http://127.0.0.1:8787` |
+| Production run | `pnpm build && pnpm start` |
 
 Keep this guide to durable rules, ownership boundaries and commands. Update it when those
 change; keep implementation walkthroughs and history out.
