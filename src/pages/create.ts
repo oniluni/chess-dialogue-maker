@@ -27,6 +27,7 @@ import { createAudioPanel } from "./audio-panel.ts";
 import { createExportRow } from "./export-row.ts";
 import type { Page } from "./page.ts";
 import { createCastPanel } from "./people-panel.ts";
+import { createSummaryPanel } from "./summary-panel.ts";
 import { PreviewPlayer } from "./preview-player.ts";
 import { createUrlPanel } from "./url-panel.ts";
 import type { Trim } from "./url-panel.ts";
@@ -78,6 +79,8 @@ export function renderCreatePage(): Page {
       updateSelection();
     },
   });
+
+  const summaryPanel = createSummaryPanel();
 
   const cast = createCastPanel({
     onAvatars: () => {
@@ -184,6 +187,7 @@ export function renderCreatePage(): Page {
       meta,
       analysis.element,
       cast.element,
+      summaryPanel,
       names,
       playerRow,
       exportRow.element,
