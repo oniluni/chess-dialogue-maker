@@ -3,6 +3,7 @@ import type { Move } from "../analysis/move.ts";
 import type { Names } from "../names.ts";
 import type { FrameFaces } from "../../shared/people.ts";
 import type { SceneAvatars } from "./avatar.ts";
+import { getStyle } from "./style.ts";
 import type { FrameState } from "./state.ts";
 import { ellipsize, setFont, wrapLines } from "./text.ts";
 
@@ -33,9 +34,6 @@ const EVAL_GAP = 3;
 const EVAL_H = 30;
 const EVAL_LABEL_SIZE = 19;
 
-const PAGE_BG = "#000000";
-const CARD_BG = "#262421";
-const PLAYERS_BG = "#161512";
 const TEXT = "#ffffff";
 const MUTED = "#9e9b98";
 const EVAL_WHITE = "#ffffff";
@@ -281,7 +279,7 @@ function drawCard(
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
 
-  ctx.fillStyle = CARD_BG;
+  ctx.fillStyle = getStyle().cardBg;
   ctx.fillRect(0, top, WIDTH, height);
   ctx.fillStyle = spec.color;
   ctx.fillRect(0, top, ACCENT_W, height);
@@ -444,7 +442,7 @@ export function createScene(
     draw(ctx, source, state, time) {
       ctx.save();
       ctx.globalAlpha = 1;
-      ctx.fillStyle = PAGE_BG;
+      ctx.fillStyle = getStyle().pageBg;
       ctx.fillRect(0, 0, WIDTH, HEIGHT);
       drawVideo(ctx, source, uiHeight, time, frames);
 
@@ -471,7 +469,7 @@ export function createScene(
         }
       }
 
-      ctx.fillStyle = PLAYERS_BG;
+      ctx.fillStyle = getStyle().playersBg;
       ctx.fillRect(0, playersTop, WIDTH, PLAYERS_H);
       drawPlayer(ctx, names.white, "White", playersTop, true, avatars?.white ?? null);
       drawPlayer(ctx, names.black, "Black", playersTop, false, avatars?.black ?? null);
