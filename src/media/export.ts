@@ -137,7 +137,7 @@ export async function exportMp4(request: ExportRequest): Promise<Blob> {
           const from = Math.max(frame.timestamp, segment.start);
           const to = Math.min(frame.timestamp + frame.duration, segment.end);
           if (to <= from) continue;
-          scene.draw(context, frame.canvas, playState(request.moves, from));
+          scene.draw(context, frame.canvas, playState(request.moves, from), from);
           await videoSource.add(outTime, to - from);
           outTime += to - from;
           request.onProgress?.(Math.min(0.95, outTime / total));
@@ -150,7 +150,7 @@ export async function exportMp4(request: ExportRequest): Promise<Blob> {
       const count = Math.max(1, Math.round(segment.duration * FRAME_RATE));
       for (let index = 0; index < count; index += 1) {
         if (still !== null) {
-          scene.draw(context, still.canvas, pauseState(request.moves, pausedIndex, index / FRAME_RATE, options));
+          scene.draw(context, still.canvas, pauseState(request.moves, pausedIndex, index / FRAME_RATE, options), segment.at);
         }
         await videoSource.add(outTime, 1 / FRAME_RATE);
         outTime += 1 / FRAME_RATE;

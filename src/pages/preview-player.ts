@@ -90,7 +90,7 @@ export class PreviewPlayer {
       this.holding && this.holdIndex >= 0
         ? pauseState(moves(), this.holdIndex, (performance.now() - this.holdStartedAt) / 1000, options)
         : playState(moves(), video.currentTime);
-    this.host.scene().draw(this.context, video, state);
+    this.host.scene().draw(this.context, video, state, video.currentTime);
   }
 
   dispose(): void {

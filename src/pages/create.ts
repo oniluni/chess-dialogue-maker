@@ -5,6 +5,7 @@ import { exportMp4 } from "../media/export.ts";
 import { createScene } from "../render/scene.ts";
 import { loadSceneAvatars } from "../render/avatar.ts";
 import { clearAvatars } from "../render/avatar-store.ts";
+import { getPeople } from "../session.ts";
 import {
   getClip,
   getMoves,
@@ -185,7 +186,7 @@ export function renderCreatePage(): Page {
   function rebuildScene(): void {
     void (async (): Promise<void> => {
       const avatars = await loadSceneAvatars();
-      scene = createScene(getMoves(), getNames(), avatars);
+      scene = createScene(getMoves(), getNames(), avatars, getPeople()?.frames ?? null);
       canvas.width = scene.width;
       canvas.height = scene.height;
       preview.draw();

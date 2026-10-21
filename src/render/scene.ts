@@ -1,6 +1,7 @@
 import { formatEval, MOVE_COLORS, MOVE_GLYPHS } from "../analysis/move.ts";
 import type { Move } from "../analysis/move.ts";
 import type { Names } from "../names.ts";
+import type { FrameFaces } from "../../shared/people.ts";
 import type { SceneAvatars } from "./avatar.ts";
 import type { FrameState } from "./state.ts";
 import { ellipsize, setFont, wrapLines } from "./text.ts";
@@ -51,6 +52,7 @@ export interface Scene {
     ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
     source: CanvasImageSource,
     state: FrameState,
+    time: number,
   ): void;
 }
 
@@ -181,14 +183,62 @@ function drawVideo(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
   source: CanvasImageSource,
   uiHeight: number,
+  time: number,
+  frames: FrameFaces[] | null,
 ): void {
   const boxHeight = HEIGHT - uiHeight;
   const size = sourceSize(source);
   if (size.width <= 0 || size.height <= 0) return;
+
+  const crop = cropRect(frames, time, size.width, size.height, boxHeight);
+  if (crop !== null) {
+    ctx.drawImage(source, crop.x, crop.y, crop.w, crop.h, 0, uiHeight, WIDTH, boxHeight);
+    return;
+  }
+
   const scale = Math.max(WIDTH / size.width, boxHeight / size.height);
   const width = size.width * scale;
   const height = size.height * scale;
   ctx.drawImage(source, (WIDTH - width) / 2, uiHeight + (boxHeight - height) / 2, width, height);
+}
+
+/** The crop that keeps the faces in view, in source pixels; `null` means a plain centre crop. */
+function cropRect(
+  frames: FrameFaces[] | null,
+  time: number,
+  sourceWidth: number,
+  sourceHeight: number,
+  boxHeight: number,
+): { x: number; y: number; w: number; h: number } | null {
+  if (frames === null || frames.length === 0) return null;
+
+  let nearest: FrameFaces | undefined;
+  let distance = Number.POSITIVE_INFINITY;
+  for (const frame of frames) {
+    const next = Math.abs(frame.time - time);
+    if (next < distance) {
+      distance = next;
+      nearest = frame;
+    }
+  }
+  if (nearest === undefined || nearest.boxes.length === 0) return null;
+
+  let cx = 0;
+  let cy = 0;
+  for (const box of nearest.boxes) {
+    cx += box.x + box.width / 2;
+    cy += box.y + box.height / 2;
+  }
+  cx /= nearest.boxes.length;
+  cy /= nearest.boxes.length;
+
+  const aspect = WIDTH / boxHeight;
+  const sourceAspect = sourceWidth / sourceHeight;
+  const w = sourceAspect > aspect ? sourceHeight * aspect : sourceWidth;
+  const h = sourceAspect > aspect ? sourceHeight : sourceWidth / aspect;
+  const x = Math.max(0, Math.min(sourceWidth - w, cx * sourceWidth - w / 2));
+  const y = Math.max(0, Math.min(sourceHeight - h, cy * sourceHeight - h / 2));
+  return { x, y, w, h };
 }
 
 function drawIcon(
@@ -370,7 +420,12 @@ function drawEval(
   }
 }
 
-export function createScene(moves: Move[], names: Names, avatars: SceneAvatars | null = null): Scene {
+export function createScene(
+  moves: Move[],
+  names: Names,
+  avatars: SceneAvatars | null = null,
+  frames: FrameFaces[] | null = null,
+): Scene {
   const measure = new OffscreenCanvas(1, 1).getContext("2d");
   if (measure === null) throw new Error("the browser did not provide a 2D context for the card");
 
@@ -386,12 +441,12 @@ export function createScene(moves: Move[], names: Names, avatars: SceneAvatars |
   return {
     width: WIDTH,
     height: HEIGHT,
-    draw(ctx, source, state) {
+    draw(ctx, source, state, time) {
       ctx.save();
       ctx.globalAlpha = 1;
       ctx.fillStyle = PAGE_BG;
       ctx.fillRect(0, 0, WIDTH, HEIGHT);
-      drawVideo(ctx, source, uiHeight);
+      drawVideo(ctx, source, uiHeight, time, frames);
 
       const current = cards[state.moveIndex];
       if (state.moveIndex < 0 || current === undefined) {
