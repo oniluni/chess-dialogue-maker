@@ -22,6 +22,8 @@ export interface ScheduleOptions {
   sfxPauseSet: string;
   /** Show the dialogue line over the video. */
   subtitles: boolean;
+  /** `vertical` crops the video to fill the frame, `original` fits it whole with bars. */
+  format: "vertical" | "original";
 }
 
 export const DEFAULT_SCHEDULE_OPTIONS: ScheduleOptions = {
@@ -36,6 +38,7 @@ export const DEFAULT_SCHEDULE_OPTIONS: ScheduleOptions = {
   sfxTypingSet: "soft",
   sfxPauseSet: "wood",
   subtitles: false,
+  format: "vertical",
 };
 
 export interface PlaySegment {

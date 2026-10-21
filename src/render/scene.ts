@@ -190,6 +190,14 @@ function drawVideo(
   const size = sourceSize(source);
   if (size.width <= 0 || size.height <= 0) return;
 
+  if (getScheduleOptions().format === "original") {
+    const scale = Math.min(WIDTH / size.width, boxHeight / size.height);
+    const width = size.width * scale;
+    const height = size.height * scale;
+    ctx.drawImage(source, (WIDTH - width) / 2, uiHeight + (boxHeight - height) / 2, width, height);
+    return;
+  }
+
   const crop = cropRect(frames, time, size.width, size.height, boxHeight);
   if (crop !== null) {
     ctx.drawImage(source, crop.x, crop.y, crop.w, crop.h, 0, uiHeight, WIDTH, boxHeight);

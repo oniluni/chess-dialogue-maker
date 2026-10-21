@@ -105,6 +105,20 @@ export function renderCreatePage(): Page {
     children: [subtitleToggle, el("span", { text: "Subtitles" })],
   });
 
+  const formatSelect = el("select", {
+    class: "select",
+    attrs: { "aria-label": "Output format" },
+    children: [
+      el("option", { text: "Vertical · crop to fill", attrs: { value: "vertical" } }),
+      el("option", { text: "Original · whole frame", attrs: { value: "original" } }),
+    ],
+  });
+  formatSelect.value = getScheduleOptions().format;
+  const formatField = el("label", {
+    class: "field",
+    children: [el("span", { text: "Format" }), formatSelect],
+  });
+
   const timelineHost = el("div", { class: "timeline-host" });
   const selection = el("p", { class: "selection" });
   const playerRow = el("div", {
@@ -115,6 +129,7 @@ export function renderCreatePage(): Page {
       el("div", { class: "transport", children: [playButton, clock] }),
       pauseOption,
       subtitleOption,
+      formatField,
       createAudioPanel(soundBoard),
       timelineHost,
       selection,
@@ -306,6 +321,10 @@ export function renderCreatePage(): Page {
   });
   subtitleToggle.addEventListener("change", () => {
     setScheduleOptions({ subtitles: subtitleToggle.checked });
+    rebuildScene();
+  });
+  formatSelect.addEventListener("change", () => {
+    setScheduleOptions({ format: formatSelect.value === "original" ? "original" : "vertical" });
     rebuildScene();
   });
   whiteName.addEventListener("input", () => {
