@@ -1,6 +1,13 @@
 import type { LlmChatMessage } from "../../shared/llm.ts";
+import type { SpeakerHint } from "../../shared/speakers.ts";
 import type { Names } from "../names.ts";
+import type { Side } from "./move.ts";
 import type { TranscriptSegment } from "./transcript.ts";
+
+export interface SpeakerContext {
+  hints: SpeakerHint[];
+  sides: Record<"A" | "B", Side>;
+}
 
 export interface MovePrompt {
   messages: LlmChatMessage[];
@@ -83,10 +90,18 @@ function clock(seconds: number): string {
   return `${minutes}:${rest}`;
 }
 
-/** The dialogue lines as the model sees them. */
-export function transcriptLines(segments: TranscriptSegment[]): string {
+function hintTag(hint: SpeakerHint | undefined): string {
+  if (hint === undefined || hint.label === null || hint.confidence < 0.8) return "";
+  return `voice ${hint.label} (${Math.round(hint.confidence * 100)}%) | `;
+}
+
+/** The dialogue lines as the model sees them, with the voice tags when they are known. */
+export function transcriptLines(segments: TranscriptSegment[], speakers: SpeakerContext | null): string {
   return segments
-    .map((segment) => `${segment.id} [${clock(segment.start)}–${clock(segment.end)}] ${segment.text}`)
+    .map(
+      (segment) =>
+        `${segment.id} [${clock(segment.start)}–${clock(segment.end)}] ${hintTag(speakers?.hints[segment.id])}${segment.text}`,
+    )
     .join("\n");
 }
 
@@ -94,7 +109,14 @@ export function buildMovePrompt(
   segments: TranscriptSegment[],
   names: Names,
   targets: { min: number; max: number },
+  speakers: SpeakerContext | null = null,
 ): MovePrompt {
+  const mapping =
+    speakers === null
+      ? ""
+      : `\nLines marked voice A or voice B are spoken by different people. One move never mixes labels, ` +
+        `and speaker must follow the mapping: voice A is ${names[speakers.sides.A]}, voice B is ${names[speakers.sides.B]}.`;
+
   return {
     messages: [
       { role: "system", content: SYSTEM },
@@ -102,8 +124,8 @@ export function buildMovePrompt(
         role: "user",
         content:
           `Players: White is "${names.white}", Black is "${names.black}".\n` +
-          `Write between ${targets.min} and ${targets.max} moves.\n\n` +
-          `Dialogue lines:\n${transcriptLines(segments)}`,
+          `Write between ${targets.min} and ${targets.max} moves.${mapping}\n\n` +
+          `Dialogue lines:\n${transcriptLines(segments, speakers)}`,
       },
     ],
     schema: moveSchema(targets),

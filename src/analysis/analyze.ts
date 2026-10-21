@@ -4,6 +4,7 @@ import type { Names } from "../names.ts";
 import { MOVE_TYPES, sanitizeMoves } from "./move.ts";
 import type { Move, MoveType } from "./move.ts";
 import { buildMovePrompt } from "./prompt.ts";
+import type { SpeakerContext } from "./prompt.ts";
 import { moveFromCandidate, reviewCandidates, shapeEvals, targetMoves } from "./quality.ts";
 import type { MoveCandidate } from "./quality.ts";
 import type { TranscriptSegment } from "./transcript.ts";
@@ -25,6 +26,7 @@ export interface AnalyzeOptions {
   provider: string;
   model: string;
   duration: number | null;
+  speakers?: SpeakerContext | null;
   onAttempt?: (attempt: number, total: number) => void;
 }
 
@@ -99,7 +101,8 @@ function toCandidates(value: unknown, total: number): MoveCandidate[] {
 /** Asks the model for moves, checks them and retries with the found problems. */
 export async function analyzeDialogue(options: AnalyzeOptions): Promise<AnalysisResult> {
   const targets = targetMoves(options.segments);
-  const prompt = buildMovePrompt(options.segments, options.names, targets);
+  const speakers = options.speakers ?? null;
+  const prompt = buildMovePrompt(options.segments, options.names, targets, speakers);
   const attempts: AnalysisAttempt[] = [];
   let messages: LlmChatMessage[] = prompt.messages;
 
@@ -118,7 +121,7 @@ export async function analyzeDialogue(options: AnalyzeOptions): Promise<Analysis
         temperature: 0.4,
       });
       candidates = toCandidates(parseJson(reply), options.segments.length);
-      issues = reviewCandidates(candidates, options.segments, targets.min);
+      issues = reviewCandidates(candidates, options.segments, targets.min, speakers);
     } catch (error) {
       issues = [error instanceof Error ? error.message : String(error)];
     }

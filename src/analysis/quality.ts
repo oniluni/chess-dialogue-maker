@@ -1,5 +1,6 @@
 import type { Names } from "../names.ts";
 import type { Move, MoveType, Side } from "./move.ts";
+import type { SpeakerContext } from "./prompt.ts";
 import type { TranscriptSegment } from "./transcript.ts";
 
 /** What each verdict stands for on the −3…+3 strength scale. */
@@ -57,6 +58,7 @@ export function reviewCandidates(
   candidates: MoveCandidate[],
   segments: TranscriptSegment[],
   minCount: number,
+  speakers: SpeakerContext | null = null,
 ): string[] {
   const issues: string[] = [];
   const total = segments.length;
@@ -92,6 +94,22 @@ export function reviewCandidates(
       issues.push(
         `Move ${index + 1}: ${candidate.moveType} does not match strength ${candidate.strength > 0 ? "+" : ""}${candidate.strength}.`,
       );
+    }
+
+    if (speakers !== null) {
+      const labels = new Set<"A" | "B">();
+      for (let segment = from; segment <= to; segment += 1) {
+        const hint = speakers.hints[segment];
+        if (hint !== undefined && hint.label !== null && hint.confidence >= 0.8) labels.add(hint.label);
+      }
+      const label = [...labels][0];
+      if (labels.size > 1) {
+        issues.push(`Move ${index + 1} mixes voices A and B: one move must be one speaker.`);
+      } else if (label !== undefined && speakers.sides[label] !== candidate.speaker) {
+        issues.push(
+          `Move ${index + 1}: voice ${label} is ${speakers.sides[label]}, but the move is given to ${candidate.speaker}.`,
+        );
+      }
     }
   }
 

@@ -1,6 +1,7 @@
 import type { AnalysisAttempt } from "./analysis/analyze.ts";
 import type { Dialogue } from "./analysis/dialogue.ts";
-import type { Move } from "./analysis/move.ts";
+import type { Move, Side } from "./analysis/move.ts";
+import type { SpeakerHint } from "../shared/speakers.ts";
 import { DEFAULT_SCHEDULE_OPTIONS } from "./analysis/schedule.ts";
 import type { ScheduleOptions } from "./analysis/schedule.ts";
 import type { TranscriptSegment } from "./analysis/transcript.ts";
@@ -31,6 +32,12 @@ export interface RecoveryState {
   duration: number | null;
 }
 
+export interface SpeakerHints {
+  hints: SpeakerHint[];
+  sides: Record<"A" | "B", Side>;
+  reliability: number;
+}
+
 let clip: Clip | null = null;
 let moves: Move[] = [];
 let movesBackup: Move[] | null = null;
@@ -40,6 +47,15 @@ let names: Names = { ...DEFAULT_NAMES };
 let llm: LlmChoice = { provider: "", model: "" };
 let recovery: RecoveryState | null = null;
 let dialogue: Dialogue | null = null;
+let speakerHints: SpeakerHints | null = null;
+
+export function getSpeakerHints(): SpeakerHints | null {
+  return speakerHints;
+}
+
+export function setSpeakerHints(next: SpeakerHints | null): void {
+  speakerHints = next;
+}
 
 export function getDialogue(): Dialogue | null {
   return dialogue;
@@ -87,6 +103,7 @@ export function getTranscript(): TranscriptSegment[] {
 
 export function setTranscript(next: TranscriptSegment[]): void {
   transcript = next;
+  speakerHints = null;
 }
 
 export function getClip(): Clip | null {

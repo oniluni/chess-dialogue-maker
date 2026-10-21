@@ -17,6 +17,9 @@ importers:
       mediabunny:
         specifier: ^1.61.6
         version: 1.61.6
+      onnxruntime-node:
+        specifier: 1.30.0
+        version: 1.30.0
     devDependencies:
       '@types/node':
         specifier: ^26.6.5

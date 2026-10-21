@@ -1,13 +1,16 @@
-﻿import { createReadStream } from "node:fs";
+import { createReadStream } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { ErrorResponse, HealthResponse } from "../shared/api.ts";
 import type { LlmChatMessage, LlmChatRequest, LlmErrorBody } from "../shared/llm.ts";
+import type { DiarizationRequest, DiarizationResponse } from "../shared/speakers.ts";
 import type { TranscriptionResponse } from "../shared/transcribe.ts";
 import { fileOf, removeJob, startDownload, statusOf } from "./download.ts";
 import type { DownloadRequest } from "./download.ts";
 import { chat, LlmError, models, providers } from "./llm.ts";
+import { diarize } from "./speakers.ts";
 import { defaultLanguage, modelName, transcribe } from "./transcribe.ts";
+import { decodeWav } from "./wav.ts";
 
 const startedAt = Date.now();
 const MAX_BODY_BYTES = 2_000_000;
@@ -50,13 +53,13 @@ function isRole(value: unknown): value is LlmChatMessage["role"] {
   return value === "system" || value === "user" || value === "assistant";
 }
 
-async function readJsonBody(request: IncomingMessage): Promise<unknown> {
+async function readJsonBody(request: IncomingMessage, limit = MAX_BODY_BYTES): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
     const buffer = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : Buffer.from(chunk);
     size += buffer.length;
-    if (size > MAX_BODY_BYTES) throw new BadRequest("The request is too large", "", 413);
+    if (size > limit) throw new BadRequest("The request is too large", "", 413);
     chunks.push(buffer);
   }
   try {
@@ -140,6 +143,28 @@ function downloadRequest(value: unknown): DownloadRequest {
     throw new BadRequest("The end of the fragment must be after its start");
   }
   return { url, start, end };
+}
+
+function speakersRequest(value: unknown): DiarizationRequest {
+  if (!isRecord(value)) throw new BadRequest("The request body must be a JSON object");
+  const wav = value["wav"];
+  if (typeof wav !== "string" || wav === "") throw new BadRequest('"wav" is required');
+
+  const raw = value["segments"];
+  if (!Array.isArray(raw) || raw.length === 0) throw new BadRequest('"segments" must be a non-empty array');
+  if (raw.length > 1000) throw new BadRequest("Too many segments");
+
+  const segments = raw.map((item, index) => {
+    if (!isRecord(item)) throw new BadRequest(`segments[${index}] must be an object`);
+    const start = item["start"];
+    const end = item["end"];
+    if (typeof start !== "number" || typeof end !== "number" || !Number.isFinite(start) || !Number.isFinite(end)) {
+      throw new BadRequest(`segments[${index}] needs numeric start and end`);
+    }
+    if (end <= start) throw new BadRequest(`segments[${index}]: end must be after start`);
+    return { start, end };
+  });
+  return { wav, segments };
 }
 
 function mediaType(name: string): string {
@@ -285,6 +310,20 @@ export async function handleApi(
     sendJson(response, 200, status);
     return;
   }
+  if (url.pathname === "/api/speakers") {
+    if (method !== "POST") return methodNotAllowed(response);
+    try {
+      const payload = speakersRequest(await readJsonBody(request, MAX_AUDIO_BYTES));
+      const wav = Buffer.from(payload.wav, "base64");
+      if (wav.length === 0) throw new BadRequest("The request has no audio");
+      const result: DiarizationResponse = await diarize(decodeWav(wav), payload.segments);
+      sendJson(response, 200, result);
+    } catch (error) {
+      fail(response, error);
+    }
+    return;
+  }
+
   if (url.pathname.startsWith("/api/")) {
     sendJson(response, 404, { error: "not_found" } satisfies ErrorResponse);
     return;
