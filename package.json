@@ -1,0 +1,21 @@
+{
+  "name": "chess-dialogue-maker",
+  "repository": "github:oniluni/chess-dialogue-maker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "lucide": "^1.60.0",
+    "mediabunny": "^1.61.6"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4"
+  }
+}
