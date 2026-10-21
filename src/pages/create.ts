@@ -114,6 +114,7 @@ export function renderCreatePage(): Page {
     children: [
       el("option", { text: "Vertical · crop to fill", attrs: { value: "vertical" } }),
       el("option", { text: "Original · whole frame", attrs: { value: "original" } }),
+      el("option", { text: "Landscape · wide canvas", attrs: { value: "landscape" } }),
     ],
   });
   formatSelect.value = getScheduleOptions().format;
@@ -328,7 +329,7 @@ export function renderCreatePage(): Page {
     rebuildScene();
   });
   formatSelect.addEventListener("change", () => {
-    setScheduleOptions({ format: formatSelect.value === "original" ? "original" : "vertical" });
+    setScheduleOptions({ format: formatSelect.value === "original" ? "original" : formatSelect.value === "landscape" ? "landscape" : "vertical" });
     rebuildScene();
   });
   whiteName.addEventListener("input", () => {

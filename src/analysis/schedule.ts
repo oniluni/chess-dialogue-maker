@@ -22,8 +22,8 @@ export interface ScheduleOptions {
   sfxPauseSet: string;
   /** Show the dialogue line over the video. */
   subtitles: boolean;
-  /** `vertical` crops the video to fill the frame, `original` fits it whole with bars. */
-  format: "vertical" | "original";
+  /** `vertical` crops the video to fill the frame, `original` fits it whole with bars, `landscape` uses a wide canvas. */
+  format: "vertical" | "original" | "landscape";
 }
 
 export const DEFAULT_SCHEDULE_OPTIONS: ScheduleOptions = {

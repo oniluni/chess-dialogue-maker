@@ -9,8 +9,8 @@ import { getScheduleOptions } from "../session.ts";
 import type { FrameState } from "./state.ts";
 import { ellipsize, setFont, wrapLines } from "./text.ts";
 
-export const WIDTH = 1080;
-export const HEIGHT = 1920;
+export let WIDTH = 1080;
+export let HEIGHT = 1920;
 
 const TOP_MARGIN = 120;
 const CARD_MIN_H = 170;
@@ -435,6 +435,10 @@ export function createScene(
   frames: FrameFaces[] | null = null,
   subtitles: TranscriptSegment[] | null = null,
 ): Scene {
+  const format = getScheduleOptions().format;
+  WIDTH = format === "landscape" ? 1920 : 1080;
+  HEIGHT = format === "landscape" ? 1080 : 1920;
+
   const measure = new OffscreenCanvas(1, 1).getContext("2d");
   if (measure === null) throw new Error("the browser did not provide a 2D context for the card");
 
