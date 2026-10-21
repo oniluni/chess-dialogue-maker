@@ -13,12 +13,26 @@ export interface ScheduleOptions {
   pauseOnMove: boolean;
   typingCps: number;
   readHold: number;
+  sfxEnabled: boolean;
+  sfxVolume: number;
+  sfxPause: boolean;
+  sfxUnpause: boolean;
+  sfxTyping: boolean;
+  sfxTypingSet: string;
+  sfxPauseSet: string;
 }
 
 export const DEFAULT_SCHEDULE_OPTIONS: ScheduleOptions = {
   pauseOnMove: true,
   typingCps: 28,
   readHold: 2,
+  sfxEnabled: true,
+  sfxVolume: 0.8,
+  sfxPause: true,
+  sfxUnpause: true,
+  sfxTyping: true,
+  sfxTypingSet: "soft",
+  sfxPauseSet: "wood",
 };
 
 export interface PlaySegment {

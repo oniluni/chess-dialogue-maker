@@ -1,6 +1,9 @@
 import { activeMoveIndex } from "../analysis/move.ts";
 import { buildSchedule } from "../analysis/schedule.ts";
 import type { PauseSegment, Schedule } from "../analysis/schedule.ts";
+import { pauseSfxEvents } from "../audio/events.ts";
+import { SoundBoard } from "../audio/player.ts";
+import { PAUSE_SETS, TYPING_SETS } from "../audio/sfx.ts";
 import { exportMp4 } from "../media/export.ts";
 import { createScene } from "../render/scene.ts";
 import { pauseState, playState } from "../render/state.ts";
@@ -23,6 +26,7 @@ import type { Page } from "./page.ts";
 
 const PLAY_LABEL = "▶";
 const PAUSE_LABEL = "❚❚";
+const PREVIEW_CHARS = 40;
 
 interface QueuedPause {
   at: number;
@@ -41,6 +45,11 @@ export function renderCreatePage(): Page {
   let holding = false;
   let holdStartedAt = 0;
   let holdIndex = -1;
+  let lastMoveIndex = -1;
+
+  const soundBoard = new SoundBoard();
+  soundBoard.setVolume(getScheduleOptions().sfxVolume);
+  soundBoard.setSets(getScheduleOptions().sfxTypingSet, getScheduleOptions().sfxPauseSet);
 
   const fileInput = el("input", {
     class: "visually-hidden",
@@ -84,6 +93,44 @@ export function renderCreatePage(): Page {
     class: "option",
     children: [pauseToggle, el("span", { text: "Pause on each move" })],
   });
+
+  const sfxToggle = el("input", { attrs: { type: "checkbox" } });
+  sfxToggle.checked = getScheduleOptions().sfxEnabled;
+  const volume = el("input", {
+    class: "volume",
+    attrs: {
+      type: "range",
+      min: "0",
+      max: "1",
+      step: "0.05",
+      value: String(getScheduleOptions().sfxVolume),
+      "aria-label": "Sound volume",
+    },
+  });
+  const typingSelect = el("select", {
+    class: "select",
+    attrs: { "aria-label": "Typing sound" },
+    children: TYPING_SETS.map((set) => el("option", { text: set.label, attrs: { value: set.id } })),
+  });
+  typingSelect.value = getScheduleOptions().sfxTypingSet;
+  const pauseSelect = el("select", {
+    class: "select",
+    attrs: { "aria-label": "Pause sound" },
+    children: PAUSE_SETS.map((set) => el("option", { text: set.label, attrs: { value: set.id } })),
+  });
+  pauseSelect.value = getScheduleOptions().sfxPauseSet;
+  const previewButton = el("button", { class: "button", text: "Preview sounds", attrs: { type: "button" } });
+  const audioBlock = el("div", {
+    class: "audio",
+    children: [
+      el("label", { class: "option", children: [sfxToggle, el("span", { text: "Sound effects" })] }),
+      el("label", { class: "field", children: [el("span", { text: "Volume" }), volume] }),
+      el("label", { class: "field", children: [el("span", { text: "Typing" }), typingSelect] }),
+      el("label", { class: "field", children: [el("span", { text: "Pause" }), pauseSelect] }),
+      previewButton,
+    ],
+  });
+
   const timelineHost = el("div", { class: "timeline-host" });
   const selection = el("p", { class: "selection" });
   const player = el("div", {
@@ -93,6 +140,7 @@ export function renderCreatePage(): Page {
       video,
       el("div", { class: "transport", children: [playButton, clock] }),
       pauseOption,
+      audioBlock,
       timelineHost,
       selection,
     ],
@@ -259,10 +307,20 @@ export function renderCreatePage(): Page {
   function cancelHold(): void {
     holding = false;
     holdIndex = -1;
+    soundBoard.stopAll();
     if (pauseTimer !== null) {
       clearTimeout(pauseTimer);
       pauseTimer = null;
     }
+  }
+
+  async function previewSfx(): Promise<void> {
+    const options = getScheduleOptions();
+    soundBoard.setVolume(options.sfxVolume);
+    soundBoard.setSets(options.sfxTypingSet, options.sfxPauseSet);
+    await soundBoard.unlock();
+    if (!options.sfxEnabled || options.sfxVolume <= 0) return;
+    await soundBoard.playSequence(pauseSfxEvents(PREVIEW_CHARS, 2.5, options));
   }
 
   function enterHold(next: QueuedPause): void {
@@ -270,6 +328,11 @@ export function renderCreatePage(): Page {
     holding = true;
     holdIndex = Math.max(0, activeMoveIndex(getMoves(), next.at));
     holdStartedAt = performance.now();
+    const options = getScheduleOptions();
+    if (options.sfxEnabled && options.sfxVolume > 0) {
+      const move = getMoves()[holdIndex];
+      void soundBoard.playSequence(pauseSfxEvents(move?.explanation.length ?? 0, next.duration, options));
+    }
     video.pause();
     video.currentTime = next.at;
     pauseTimer = window.setTimeout(() => {
@@ -289,6 +352,14 @@ export function renderCreatePage(): Page {
         return;
       }
       if (video.paused) return;
+
+      const index = activeMoveIndex(getMoves(), video.currentTime);
+      if (index !== lastMoveIndex) {
+        const options = getScheduleOptions();
+        if (index >= 0 && !options.pauseOnMove && options.sfxEnabled) void soundBoard.play("move");
+        lastMoveIndex = index;
+      }
+
       const next = pauseQueue.find((pause) => !pause.done && video.currentTime >= pause.at);
       if (next !== undefined) {
         enterHold(next);
@@ -310,6 +381,7 @@ export function renderCreatePage(): Page {
       video.pause();
       return;
     }
+    void soundBoard.unlock();
     const { start, end } = clip.range;
     if (video.currentTime < start || video.currentTime >= end) video.currentTime = start;
     void video.play();
@@ -338,6 +410,25 @@ export function renderCreatePage(): Page {
     setScheduleOptions({ pauseOnMove: pauseToggle.checked });
     updateSelection();
   });
+  sfxToggle.addEventListener("change", () => {
+    setScheduleOptions({ sfxEnabled: sfxToggle.checked });
+  });
+  volume.addEventListener("input", () => {
+    const value = Number(volume.value);
+    setScheduleOptions({ sfxVolume: value });
+    soundBoard.setVolume(value);
+  });
+  typingSelect.addEventListener("change", () => {
+    setScheduleOptions({ sfxTypingSet: typingSelect.value });
+    soundBoard.setSets(typingSelect.value, pauseSelect.value);
+  });
+  pauseSelect.addEventListener("change", () => {
+    setScheduleOptions({ sfxPauseSet: pauseSelect.value });
+    soundBoard.setSets(typingSelect.value, pauseSelect.value);
+  });
+  previewButton.addEventListener("click", () => {
+    void previewSfx();
+  });
   whiteName.addEventListener("input", () => {
     setNames({ white: whiteName.value });
     rebuildScene();
@@ -360,6 +451,7 @@ export function renderCreatePage(): Page {
     if (!holding) cancelHold();
   });
   video.addEventListener("seeked", () => {
+    lastMoveIndex = -1;
     drawPreview();
     if (!video.paused) rebuildQueue();
   });
@@ -385,6 +477,7 @@ export function renderCreatePage(): Page {
     dispose() {
       stopPreviewLoop();
       cancelHold();
+      soundBoard.dispose();
       video.pause();
       video.removeAttribute("src");
       video.load();
