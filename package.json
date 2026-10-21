@@ -1,0 +1,28 @@
+{
+  "name": "chess-dialogue-maker",
+  "repository": "github:oniluni/chess-dialogue-maker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.ts",
+    "dev:web": "vite",
+    "dev:server": "node server/index.ts",
+    "build": "tsc --noEmit && vite build",
+    "start": "node server/index.ts",
+    "preview": "vite preview",
+    "test": "node --test test/api.test.ts test/analysis.test.ts test/download-cache.test.ts test/download.test.ts test/model-download.test.ts test/project.test.ts test/search.test.ts test/wav.test.ts test/yamnet.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.3.1",
+    "lucide": "^1.60.0",
+    "mediabunny": "^1.61.6",
+    "onnxruntime-node": "1.30.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4"
+  }
+}

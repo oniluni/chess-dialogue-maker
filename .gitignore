@@ -1,29 +1,17 @@
-.venv/
-__pycache__/
+node_modules/
+dist/
+.vite/
+.DS_Store
+*.local
+.vscode/
+.idea/
+*.swp
+
+# secrets
 .env
-cookies.txt
-*cookies*.txt
-youtube_cookies.txt
-jobs/
-.gradio/
-assets/fonts/*.ttf
-assets/models/
-.ui_prefs.json
-style_presets.json
 
-# Secrets
-.env
-.env.*
-!.env.example
+# downloaded models
+.cache/
 
-# Python
-.venv/
-venv/
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-
-# Gradio
-.gradio/
+# tmp files -> remove before merge this shit
+old/
