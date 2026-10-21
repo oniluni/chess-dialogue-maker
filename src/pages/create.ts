@@ -1,11 +1,8 @@
-import { activeMoveIndex } from "../analysis/move.ts";
 import { buildSchedule } from "../analysis/schedule.ts";
-import type { PauseSegment, Schedule } from "../analysis/schedule.ts";
-import { pauseSfxEvents } from "../audio/events.ts";
+import type { Schedule } from "../analysis/schedule.ts";
 import { SoundBoard } from "../audio/player.ts";
 import { exportMp4 } from "../media/export.ts";
 import { createScene } from "../render/scene.ts";
-import { pauseState, playState } from "../render/state.ts";
 import {
   getClip,
   getMoves,
@@ -25,29 +22,17 @@ import { createAnalysisPanel } from "./analysis-panel.ts";
 import { createAudioPanel } from "./audio-panel.ts";
 import { createExportRow } from "./export-row.ts";
 import type { Page } from "./page.ts";
+import { PreviewPlayer } from "./preview-player.ts";
 import { createUrlPanel } from "./url-panel.ts";
 import type { Trim } from "./url-panel.ts";
 
 const PLAY_LABEL = "▶";
 const PAUSE_LABEL = "❚❚";
 
-interface QueuedPause {
-  at: number;
-  duration: number;
-  done: boolean;
-}
-
 export function renderCreatePage(): Page {
   let clip: Clip | null = getClip();
   let timeline: Timeline | null = null;
   let scene = createScene(getMoves(), getNames());
-  let pauseQueue: QueuedPause[] = [];
-  let pauseTimer: number | null = null;
-  let frameLoop: number | null = null;
-  let holding = false;
-  let holdStartedAt = 0;
-  let holdIndex = -1;
-  let lastMoveIndex = -1;
 
   const soundBoard = new SoundBoard();
   soundBoard.setVolume(getScheduleOptions().sfxVolume);
@@ -65,7 +50,6 @@ export function renderCreatePage(): Page {
     class: "stage",
     attrs: { width: String(scene.width), height: String(scene.height) },
   });
-  const context = canvas.getContext("2d");
 
   const whiteName = el("input", {
     class: "name-input",
@@ -105,7 +89,7 @@ export function renderCreatePage(): Page {
 
   const timelineHost = el("div", { class: "timeline-host" });
   const selection = el("p", { class: "selection" });
-  const player = el("div", {
+  const playerRow = el("div", {
     class: "player",
     children: [
       canvas,
@@ -117,7 +101,25 @@ export function renderCreatePage(): Page {
       selection,
     ],
   });
-  player.hidden = true;
+  playerRow.hidden = true;
+
+  const preview = new PreviewPlayer({
+    video,
+    canvas,
+    scene: () => scene,
+    moves: getMoves,
+    options: getScheduleOptions,
+    schedule: () => (clip === null ? null : buildSchedule(clip.range, getMoves(), getScheduleOptions())),
+    range: () => (clip === null ? null : clip.range),
+    sound: soundBoard,
+    onTime: (time, duration) => {
+      timeline?.setPlayhead(time);
+      clock.textContent = `${formatTimestamp(time)} / ${formatTimestamp(duration)}`;
+    },
+    onPlayingChange: (playing) => {
+      playButton.textContent = playing ? PAUSE_LABEL : PLAY_LABEL;
+    },
+  });
 
   const exportRow = createExportRow(() => {
     void runExport();
@@ -148,7 +150,7 @@ export function renderCreatePage(): Page {
       meta,
       analysis.element,
       names,
-      player,
+      playerRow,
       exportRow.element,
     ],
   });
@@ -170,21 +172,11 @@ export function renderCreatePage(): Page {
     timeline?.setRange({ start, end });
   }
 
-  function drawPreview(): void {
-    if (clip === null || context === null || video.readyState < 2) return;
-    const options = getScheduleOptions();
-    const state =
-      holding && holdIndex >= 0
-        ? pauseState(getMoves(), holdIndex, (performance.now() - holdStartedAt) / 1000, options)
-        : playState(getMoves(), video.currentTime);
-    scene.draw(context, video, state);
-  }
-
   function rebuildScene(): void {
     scene = createScene(getMoves(), getNames());
     canvas.width = scene.width;
     canvas.height = scene.height;
-    drawPreview();
+    preview.draw();
   }
 
   function showClip(next: Clip): void {
@@ -197,7 +189,7 @@ export function renderCreatePage(): Page {
       formatBytes(next.file.size),
       info.hasAudio ? "with audio" : "without audio",
     ].join(" · ");
-    player.hidden = false;
+    playerRow.hidden = false;
     exportRow.element.hidden = false;
     exportRow.hideDownload();
     timeline = createTimeline({
@@ -211,7 +203,7 @@ export function renderCreatePage(): Page {
         if (video.currentTime < range.start || video.currentTime > range.end) {
           video.currentTime = range.start;
         }
-        drawPreview();
+        preview.draw();
       },
       onSeek: (time) => {
         video.currentTime = time;
@@ -265,91 +257,6 @@ export function renderCreatePage(): Page {
     }
   }
 
-  function rebuildQueue(): void {
-    if (clip === null) {
-      pauseQueue = [];
-      return;
-    }
-    const now = video.currentTime;
-    pauseQueue = scheduleFor(clip)
-      .segments.filter((segment): segment is PauseSegment => segment.kind === "pause")
-      .map((segment) => ({ at: segment.at, duration: segment.duration, done: segment.at <= now + 0.02 }));
-  }
-
-  function cancelHold(): void {
-    holding = false;
-    holdIndex = -1;
-    soundBoard.stopAll();
-    if (pauseTimer !== null) {
-      clearTimeout(pauseTimer);
-      pauseTimer = null;
-    }
-  }
-
-  function enterHold(next: QueuedPause): void {
-    next.done = true;
-    holding = true;
-    holdIndex = Math.max(0, activeMoveIndex(getMoves(), next.at));
-    holdStartedAt = performance.now();
-    const options = getScheduleOptions();
-    if (options.sfxEnabled && options.sfxVolume > 0) {
-      const move = getMoves()[holdIndex];
-      void soundBoard.playSequence(pauseSfxEvents(move?.explanation.length ?? 0, next.duration, options));
-    }
-    video.pause();
-    video.currentTime = next.at;
-    pauseTimer = window.setTimeout(() => {
-      pauseTimer = null;
-      holding = false;
-      holdIndex = -1;
-      if (!video.ended) void video.play();
-    }, next.duration * 1000);
-  }
-
-  function startPreviewLoop(): void {
-    if (frameLoop !== null) return;
-    const step = (): void => {
-      frameLoop = requestAnimationFrame(step);
-      if (holding) {
-        drawPreview();
-        return;
-      }
-      if (video.paused) return;
-
-      const index = activeMoveIndex(getMoves(), video.currentTime);
-      if (index !== lastMoveIndex) {
-        const options = getScheduleOptions();
-        if (index >= 0 && !options.pauseOnMove && options.sfxEnabled) void soundBoard.play("move");
-        lastMoveIndex = index;
-      }
-
-      const next = pauseQueue.find((pause) => !pause.done && video.currentTime >= pause.at);
-      if (next !== undefined) {
-        enterHold(next);
-        return;
-      }
-      drawPreview();
-    };
-    frameLoop = requestAnimationFrame(step);
-  }
-
-  function stopPreviewLoop(): void {
-    if (frameLoop !== null) cancelAnimationFrame(frameLoop);
-    frameLoop = null;
-  }
-
-  function togglePlay(): void {
-    if (clip === null) return;
-    if (!video.paused) {
-      video.pause();
-      return;
-    }
-    void soundBoard.unlock();
-    const { start, end } = clip.range;
-    if (video.currentTime < start || video.currentTime >= end) video.currentTime = start;
-    void video.play();
-  }
-
   dropZone.addEventListener("click", () => fileInput.click());
   dropZone.addEventListener("dragover", (event) => {
     event.preventDefault();
@@ -368,7 +275,7 @@ export function renderCreatePage(): Page {
     if (file !== undefined) void openFile(file);
   });
 
-  playButton.addEventListener("click", togglePlay);
+  playButton.addEventListener("click", () => preview.toggle());
   pauseToggle.addEventListener("change", () => {
     setScheduleOptions({ pauseOnMove: pauseToggle.checked });
     updateSelection();
@@ -382,45 +289,17 @@ export function renderCreatePage(): Page {
     rebuildScene();
   });
 
-  video.addEventListener("loadedmetadata", () => {
-    if (clip !== null) video.currentTime = clip.range.start;
-  });
-  video.addEventListener("loadeddata", drawPreview);
-  video.addEventListener("play", () => {
-    playButton.textContent = PAUSE_LABEL;
-    rebuildQueue();
-  });
-  video.addEventListener("pause", () => {
-    playButton.textContent = PLAY_LABEL;
-    if (!holding) cancelHold();
-  });
-  video.addEventListener("seeked", () => {
-    lastMoveIndex = -1;
-    drawPreview();
-    if (!video.paused) rebuildQueue();
-  });
-  video.addEventListener("timeupdate", () => {
-    const time = video.currentTime;
-    timeline?.setPlayhead(time);
-    clock.textContent = `${formatTimestamp(time)} / ${formatTimestamp(video.duration)}`;
-    if (clip !== null && !video.paused && time >= clip.range.end) {
-      video.pause();
-      video.currentTime = clip.range.end;
-    }
-  });
-
-  startPreviewLoop();
+  preview.start();
   if (clip !== null) showClip(clip);
   // The webfont may arrive after the first frame; redraw once it is ready.
   void document.fonts.ready.then(() => {
-    drawPreview();
+    preview.draw();
   });
 
   return {
     element,
     dispose() {
-      stopPreviewLoop();
-      cancelHold();
+      preview.dispose();
       soundBoard.dispose();
       analysis.dispose();
       exportRow.dispose();
