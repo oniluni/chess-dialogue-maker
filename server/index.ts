@@ -1,48 +1,23 @@
+import "./env.ts";
+
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { existsSync } from "node:fs";
 
-import type { ErrorResponse, HealthResponse } from "../shared/api.ts";
+import { handleApi, sendJson, sendText } from "./api.ts";
 import { DIST_DIR, HOST, PORT } from "./config.ts";
 import { serveStatic } from "./static.ts";
 
-const startedAt = Date.now();
-
-function sendJson(response: ServerResponse, status: number, body: unknown): void {
-  const payload = JSON.stringify(body);
-  response.writeHead(status, {
-    "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(payload),
-    "cache-control": "no-store",
-  });
-  response.end(payload);
-}
-
-function sendText(response: ServerResponse, status: number, text: string): void {
-  response.writeHead(status, { "content-type": "text/plain; charset=utf-8" });
-  response.end(text);
-}
-
 async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
-  if (request.method !== "GET") {
-    sendJson(response, 405, { error: "method_not_allowed" } satisfies ErrorResponse);
-    return;
-  }
-
   const url = new URL(request.url ?? "/", `http://${HOST}:${PORT}`);
 
-  if (url.pathname === "/api/health") {
-    const body: HealthResponse = {
-      ok: true,
-      service: "chess-dialogue-maker",
-      uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
-    };
-    sendJson(response, 200, body);
+  if (url.pathname.startsWith("/api/")) {
+    await handleApi(request, response, url);
     return;
   }
 
-  if (url.pathname.startsWith("/api/")) {
-    sendJson(response, 404, { error: "not_found" } satisfies ErrorResponse);
+  if (request.method !== "GET") {
+    sendJson(response, 405, { error: "method_not_allowed" });
     return;
   }
 

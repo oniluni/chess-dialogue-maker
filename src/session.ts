@@ -1,6 +1,7 @@
 import type { Move } from "./analysis/move.ts";
 import { DEFAULT_SCHEDULE_OPTIONS } from "./analysis/schedule.ts";
 import type { ScheduleOptions } from "./analysis/schedule.ts";
+import type { TranscriptSegment } from "./analysis/transcript.ts";
 import { openMedia } from "./media/probe.ts";
 import type { OpenedMedia } from "./media/probe.ts";
 import { clampRange } from "./media/range.ts";
@@ -16,10 +17,17 @@ export interface Clip {
   range: TimeRange;
 }
 
+export interface LlmChoice {
+  provider: string;
+  model: string;
+}
+
 let clip: Clip | null = null;
 let moves: Move[] = [];
+let transcript: TranscriptSegment[] = [];
 let scheduleOptions: ScheduleOptions = { ...DEFAULT_SCHEDULE_OPTIONS };
 let names: Names = { ...DEFAULT_NAMES };
+let llm: LlmChoice = { provider: "", model: "" };
 
 export function getScheduleOptions(): ScheduleOptions {
   return scheduleOptions;
@@ -35,6 +43,22 @@ export function getNames(): Names {
 
 export function setNames(patch: Partial<Names>): void {
   names = { ...names, ...patch };
+}
+
+export function getLlmChoice(): LlmChoice {
+  return llm;
+}
+
+export function setLlmChoice(patch: Partial<LlmChoice>): void {
+  llm = { ...llm, ...patch };
+}
+
+export function getTranscript(): TranscriptSegment[] {
+  return transcript;
+}
+
+export function setTranscript(next: TranscriptSegment[]): void {
+  transcript = next;
 }
 
 export function getClip(): Clip | null {
@@ -74,4 +98,5 @@ export function closeClip(): void {
   clip.media.input.dispose();
   clip = null;
   moves = [];
+  transcript = [];
 }

@@ -7,5 +7,8 @@ dist/
 .idea/
 *.swp
 
+# secrets
+.env
+
 # tmp files -> remove before merge this shit
 old/

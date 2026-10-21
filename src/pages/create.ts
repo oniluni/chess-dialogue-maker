@@ -3,7 +3,6 @@ import { buildSchedule } from "../analysis/schedule.ts";
 import type { PauseSegment, Schedule } from "../analysis/schedule.ts";
 import { pauseSfxEvents } from "../audio/events.ts";
 import { SoundBoard } from "../audio/player.ts";
-import { PAUSE_SETS, TYPING_SETS } from "../audio/sfx.ts";
 import { exportMp4 } from "../media/export.ts";
 import { createScene } from "../render/scene.ts";
 import { pauseState, playState } from "../render/state.ts";
@@ -22,11 +21,13 @@ import { el } from "../ui/dom.ts";
 import { formatBytes, formatClock, formatTimestamp, messageOf } from "../ui/text.ts";
 import { createTimeline } from "../ui/timeline.ts";
 import type { Timeline } from "../ui/timeline.ts";
+import { createAnalysisPanel } from "./analysis-panel.ts";
+import { createAudioPanel } from "./audio-panel.ts";
+import { createExportRow } from "./export-row.ts";
 import type { Page } from "./page.ts";
 
 const PLAY_LABEL = "▶";
 const PAUSE_LABEL = "❚❚";
-const PREVIEW_CHARS = 40;
 
 interface QueuedPause {
   at: number;
@@ -37,7 +38,6 @@ interface QueuedPause {
 export function renderCreatePage(): Page {
   let clip: Clip | null = getClip();
   let timeline: Timeline | null = null;
-  let downloadUrl: string | null = null;
   let scene = createScene(getMoves(), getNames());
   let pauseQueue: QueuedPause[] = [];
   let pauseTimer: number | null = null;
@@ -81,6 +81,13 @@ export function renderCreatePage(): Page {
     ],
   });
 
+  const analysis = createAnalysisPanel({
+    onMoves: () => {
+      rebuildScene();
+      updateSelection();
+    },
+  });
+
   const playButton = el("button", {
     class: "button",
     text: PLAY_LABEL,
@@ -94,43 +101,6 @@ export function renderCreatePage(): Page {
     children: [pauseToggle, el("span", { text: "Pause on each move" })],
   });
 
-  const sfxToggle = el("input", { attrs: { type: "checkbox" } });
-  sfxToggle.checked = getScheduleOptions().sfxEnabled;
-  const volume = el("input", {
-    class: "volume",
-    attrs: {
-      type: "range",
-      min: "0",
-      max: "1",
-      step: "0.05",
-      value: String(getScheduleOptions().sfxVolume),
-      "aria-label": "Sound volume",
-    },
-  });
-  const typingSelect = el("select", {
-    class: "select",
-    attrs: { "aria-label": "Typing sound" },
-    children: TYPING_SETS.map((set) => el("option", { text: set.label, attrs: { value: set.id } })),
-  });
-  typingSelect.value = getScheduleOptions().sfxTypingSet;
-  const pauseSelect = el("select", {
-    class: "select",
-    attrs: { "aria-label": "Pause sound" },
-    children: PAUSE_SETS.map((set) => el("option", { text: set.label, attrs: { value: set.id } })),
-  });
-  pauseSelect.value = getScheduleOptions().sfxPauseSet;
-  const previewButton = el("button", { class: "button", text: "Preview sounds", attrs: { type: "button" } });
-  const audioBlock = el("div", {
-    class: "audio",
-    children: [
-      el("label", { class: "option", children: [sfxToggle, el("span", { text: "Sound effects" })] }),
-      el("label", { class: "field", children: [el("span", { text: "Volume" }), volume] }),
-      el("label", { class: "field", children: [el("span", { text: "Typing" }), typingSelect] }),
-      el("label", { class: "field", children: [el("span", { text: "Pause" }), pauseSelect] }),
-      previewButton,
-    ],
-  });
-
   const timelineHost = el("div", { class: "timeline-host" });
   const selection = el("p", { class: "selection" });
   const player = el("div", {
@@ -140,23 +110,16 @@ export function renderCreatePage(): Page {
       video,
       el("div", { class: "transport", children: [playButton, clock] }),
       pauseOption,
-      audioBlock,
+      createAudioPanel(soundBoard),
       timelineHost,
       selection,
     ],
   });
   player.hidden = true;
 
-  const exportButton = el("button", {
-    class: "button button-primary",
-    text: "Render MP4",
-    attrs: { type: "button" },
+  const exportRow = createExportRow(() => {
+    void runExport();
   });
-  const progress = el("progress", { class: "progress", attrs: { max: "1", value: "0" } });
-  const download = el("a", { class: "button", text: "Download MP4" });
-  download.hidden = true;
-  const exportRow = el("div", { class: "export-row", children: [exportButton, progress, download] });
-  exportRow.hidden = true;
 
   const dropZone = el("button", {
     class: "dropzone",
@@ -173,18 +136,15 @@ export function renderCreatePage(): Page {
       fileInput,
       status,
       meta,
+      analysis.element,
       names,
       player,
-      exportRow,
+      exportRow.element,
     ],
   });
 
   function setStatus(text: string): void {
     status.textContent = text;
-  }
-
-  function revoke(url: string | null): void {
-    if (url !== null) URL.revokeObjectURL(url);
   }
 
   function scheduleFor(next: Clip): Schedule {
@@ -228,8 +188,8 @@ export function renderCreatePage(): Page {
       info.hasAudio ? "with audio" : "without audio",
     ].join(" · ");
     player.hidden = false;
-    exportRow.hidden = false;
-    download.hidden = true;
+    exportRow.element.hidden = false;
+    exportRow.hideDownload();
     timeline = createTimeline({
       duration: info.duration,
       range: next.range,
@@ -250,6 +210,7 @@ export function renderCreatePage(): Page {
     timelineHost.replaceChildren(timeline.element);
     updateSelection();
     clock.textContent = `0:00.0 / ${formatTimestamp(info.duration)}`;
+    analysis.refresh();
     setStatus(next.file.name);
   }
 
@@ -264,9 +225,9 @@ export function renderCreatePage(): Page {
 
   async function runExport(): Promise<void> {
     if (clip === null) return;
-    exportButton.disabled = true;
-    download.hidden = true;
-    progress.value = 0;
+    exportRow.setBusy(true);
+    exportRow.hideDownload();
+    exportRow.setProgress(0);
     setStatus("Rendering MP4…");
     try {
       const blob = await exportMp4({
@@ -277,19 +238,15 @@ export function renderCreatePage(): Page {
         moves: getMoves(),
         options: getScheduleOptions(),
         onProgress: (fraction) => {
-          progress.value = fraction;
+          exportRow.setProgress(fraction);
         },
       });
-      revoke(downloadUrl);
-      downloadUrl = URL.createObjectURL(blob);
-      download.href = downloadUrl;
-      download.download = `${clip.file.name.replace(/\.[^.]+$/, "") || "clip"}.mp4`;
-      download.hidden = false;
+      exportRow.showDownload(blob, `${clip.file.name.replace(/\.[^.]+$/, "") || "clip"}.mp4`);
       setStatus(`Done: ${formatBytes(blob.size)}`);
     } catch (error) {
       setStatus(messageOf(error));
     } finally {
-      exportButton.disabled = false;
+      exportRow.setBusy(false);
     }
   }
 
@@ -312,15 +269,6 @@ export function renderCreatePage(): Page {
       clearTimeout(pauseTimer);
       pauseTimer = null;
     }
-  }
-
-  async function previewSfx(): Promise<void> {
-    const options = getScheduleOptions();
-    soundBoard.setVolume(options.sfxVolume);
-    soundBoard.setSets(options.sfxTypingSet, options.sfxPauseSet);
-    await soundBoard.unlock();
-    if (!options.sfxEnabled || options.sfxVolume <= 0) return;
-    await soundBoard.playSequence(pauseSfxEvents(PREVIEW_CHARS, 2.5, options));
   }
 
   function enterHold(next: QueuedPause): void {
@@ -410,25 +358,6 @@ export function renderCreatePage(): Page {
     setScheduleOptions({ pauseOnMove: pauseToggle.checked });
     updateSelection();
   });
-  sfxToggle.addEventListener("change", () => {
-    setScheduleOptions({ sfxEnabled: sfxToggle.checked });
-  });
-  volume.addEventListener("input", () => {
-    const value = Number(volume.value);
-    setScheduleOptions({ sfxVolume: value });
-    soundBoard.setVolume(value);
-  });
-  typingSelect.addEventListener("change", () => {
-    setScheduleOptions({ sfxTypingSet: typingSelect.value });
-    soundBoard.setSets(typingSelect.value, pauseSelect.value);
-  });
-  pauseSelect.addEventListener("change", () => {
-    setScheduleOptions({ sfxPauseSet: pauseSelect.value });
-    soundBoard.setSets(typingSelect.value, pauseSelect.value);
-  });
-  previewButton.addEventListener("click", () => {
-    void previewSfx();
-  });
   whiteName.addEventListener("input", () => {
     setNames({ white: whiteName.value });
     rebuildScene();
@@ -465,10 +394,6 @@ export function renderCreatePage(): Page {
     }
   });
 
-  exportButton.addEventListener("click", () => {
-    void runExport();
-  });
-
   startPreviewLoop();
   if (clip !== null) showClip(clip);
 
@@ -478,11 +403,11 @@ export function renderCreatePage(): Page {
       stopPreviewLoop();
       cancelHold();
       soundBoard.dispose();
+      analysis.dispose();
+      exportRow.dispose();
       video.pause();
       video.removeAttribute("src");
       video.load();
-      revoke(downloadUrl);
-      downloadUrl = null;
     },
   };
 }
